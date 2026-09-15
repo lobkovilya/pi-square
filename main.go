@@ -5,7 +5,9 @@ package main
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,9 +19,21 @@ import (
 	"syscall"
 
 	"golang.org/x/sys/unix"
+	"golang.org/x/term"
 )
 
-const stageMarker = "--pi-square-internal-stage"
+const (
+	stageMarker   = "--pi-square-internal-stage"
+	extensionPath = "/run/pi-square/gh-mode.ts"
+)
+
+//go:embed gh-mode.ts
+var ghModeExtension []byte
+
+type githubTokens struct {
+	ReadOnly string `json:"read_only"`
+	Write    string `json:"write"`
+}
 
 type slot struct {
 	dir  string
@@ -68,6 +82,11 @@ func run(args []string) error {
 		return err
 	}
 
+	tokens, err := loadOrCreateGitHubTokens(home)
+	if err != nil {
+		return err
+	}
+
 	s, err := claimFFF(workdir, home)
 	if err != nil {
 		return err
@@ -86,15 +105,21 @@ func run(args []string) error {
 	}
 	token := hex.EncodeToString(tokenBytes)
 	uid, gid := os.Getuid(), os.Getgid()
-	env := append(os.Environ(),
-		"PI_SQUARE_STAGE_TOKEN="+token,
-		"PI_SQUARE_ROOT="+root,
-		"PI_SQUARE_WORKDIR="+workdir,
-		"PI_SQUARE_HOME="+home,
-		"PI_SQUARE_PI="+pi,
-		"PI_SQUARE_FFF="+s.dir,
-		"PI_SQUARE_HOST_UID="+strconv.Itoa(uid),
-	)
+	env := os.Environ()
+	for key, value := range map[string]string{
+		"PI_SQUARE_STAGE_TOKEN": token,
+		"PI_SQUARE_ROOT":        root,
+		"PI_SQUARE_WORKDIR":     workdir,
+		"PI_SQUARE_HOME":        home,
+		"PI_SQUARE_PI":          pi,
+		"PI_SQUARE_FFF":         s.dir,
+		"PI_SQUARE_HOST_UID":    strconv.Itoa(uid),
+		"PI_SQUARE_ACTIVE":      "1",
+		"PI_GH_RO_TOKEN":        tokens.ReadOnly,
+		"PI_GH_W_TOKEN":         tokens.Write,
+	} {
+		env = setEnv(env, key, value)
+	}
 
 	cmd := exec.Command("/proc/self/exe", append([]string{stageMarker, token}, args...)...)
 	cmd.Env = env
@@ -148,6 +173,9 @@ func sandbox(args []string) error {
 		return err
 	}
 	if err := mountTmpfs(target(root, "/tmp"), "mode=1777"); err != nil {
+		return err
+	}
+	if err := writeExtension(root); err != nil {
 		return err
 	}
 
@@ -212,8 +240,116 @@ func sandbox(args []string) error {
 	if err := dropCapabilities(); err != nil {
 		return fmt.Errorf("drop capabilities: %w", err)
 	}
-	argv := append([]string{"pi"}, args...)
+	argv := append([]string{"pi", "--extension", extensionPath}, args...)
 	return unix.Exec(pi, argv, cleanEnv(os.Environ()))
+}
+
+func loadOrCreateGitHubTokens(home string) (githubTokens, error) {
+	dir := filepath.Join(home, ".pi-square")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return githubTokens{}, fmt.Errorf("create token directory: %w", err)
+	}
+	if err := os.Chmod(dir, 0700); err != nil {
+		return githubTokens{}, fmt.Errorf("secure token directory: %w", err)
+	}
+
+	path := filepath.Join(dir, "github-tokens.json")
+	data, err := os.ReadFile(path)
+	if err == nil {
+		info, statErr := os.Stat(path)
+		if statErr != nil {
+			return githubTokens{}, fmt.Errorf("inspect GitHub tokens: %w", statErr)
+		}
+		if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
+			return githubTokens{}, fmt.Errorf("%s must be a regular file accessible only by its owner", path)
+		}
+		var tokens githubTokens
+		if err := json.Unmarshal(data, &tokens); err != nil {
+			return githubTokens{}, fmt.Errorf("parse %s: %w", path, err)
+		}
+		if tokens.ReadOnly == "" || tokens.Write == "" {
+			return githubTokens{}, fmt.Errorf("%s does not contain both GitHub tokens", path)
+		}
+		return tokens, nil
+	}
+	if !os.IsNotExist(err) {
+		return githubTokens{}, fmt.Errorf("read GitHub tokens: %w", err)
+	}
+
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return githubTokens{}, fmt.Errorf("GitHub tokens are not configured and no terminal is available: %w", err)
+	}
+	defer tty.Close()
+	readToken := func(prompt string) (string, error) {
+		if _, err := fmt.Fprint(tty, prompt); err != nil {
+			return "", err
+		}
+		value, err := term.ReadPassword(int(tty.Fd()))
+		fmt.Fprintln(tty)
+		if err != nil {
+			return "", err
+		}
+		token := strings.TrimSpace(string(value))
+		if token == "" {
+			return "", errors.New("token cannot be empty")
+		}
+		return token, nil
+	}
+
+	readOnly, err := readToken("Please enter read-only GitHub token: ")
+	if err != nil {
+		return githubTokens{}, fmt.Errorf("read read-only GitHub token: %w", err)
+	}
+	write, err := readToken("Please enter write GitHub token: ")
+	if err != nil {
+		return githubTokens{}, fmt.Errorf("read write GitHub token: %w", err)
+	}
+	tokens := githubTokens{ReadOnly: readOnly, Write: write}
+	if err := writeGitHubTokens(path, tokens); err != nil {
+		return githubTokens{}, err
+	}
+	return tokens, nil
+}
+
+func writeGitHubTokens(path string, tokens githubTokens) error {
+	file, err := os.CreateTemp(filepath.Dir(path), ".github-tokens-*")
+	if err != nil {
+		return fmt.Errorf("create token file: %w", err)
+	}
+	tempPath := file.Name()
+	defer os.Remove(tempPath)
+
+	if err := file.Chmod(0600); err != nil {
+		file.Close()
+		return fmt.Errorf("secure token file: %w", err)
+	}
+	if err := json.NewEncoder(file).Encode(tokens); err != nil {
+		file.Close()
+		return fmt.Errorf("write token file: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		return fmt.Errorf("sync token file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close token file: %w", err)
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		return fmt.Errorf("install token file: %w", err)
+	}
+	return nil
+}
+
+func writeExtension(root string) error {
+	path := target(root, extensionPath)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("create extension directory: %w", err)
+	}
+	if err := os.WriteFile(path, ghModeExtension, 0444); err != nil {
+		return fmt.Errorf("write bundled extension: %w", err)
+	}
+	return nil
 }
 
 func dropCapabilities() error {
@@ -342,6 +478,17 @@ func claimFFF(workdir, home string) (*slot, error) {
 		lock.Close()
 	}
 	return nil, errors.New("all 8 per-project fff database slots are busy")
+}
+
+func setEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	out := env[:0]
+	for _, item := range env {
+		if !strings.HasPrefix(item, prefix) {
+			out = append(out, item)
+		}
+	}
+	return append(out, prefix+value)
 }
 
 func cleanEnv(env []string) []string {
