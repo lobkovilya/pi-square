@@ -30,7 +30,7 @@ function tokenEnvName(mode: GhMode): string {
 
 function modePrompt(mode: GhMode): string {
 	const permission = mode === "browse"
-		? "You may inspect GitHub and repository state, but local Git metadata and remote GitHub state are read-only."
+		? "You may inspect GitHub and repository state, but the entire workdir and remote GitHub state are read-only."
 		: mode === "local"
 			? "Local Git changes are allowed, but remote GitHub state is read-only."
 			: "Local Git changes and remote GitHub writes are allowed.";
@@ -145,16 +145,6 @@ function isInside(child: string, parent: string): boolean {
 	return relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-function findRepoRoot(start = process.cwd()): string | undefined {
-	let current = path.resolve(start);
-	while (true) {
-		if (fs.existsSync(path.join(current, ".git"))) return current;
-		const parent = path.dirname(current);
-		if (parent === current) return undefined;
-		current = parent;
-	}
-}
-
 function resolvedTargetPath(inputPath: string): string {
 	const absolute = path.resolve(process.cwd(), inputPath);
 	if (fs.existsSync(absolute)) return fs.realpathSync.native(absolute);
@@ -164,8 +154,6 @@ function resolvedTargetPath(inputPath: string): string {
 
 function modeSandbox(command: string, mode: GhMode): string {
 	if (mode === "publish") return command;
-	const repoRoot = findRepoRoot();
-	if (!repoRoot) return command;
 
 	const setup = ["export GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0"];
 	if (mode === "local") {
@@ -190,6 +178,7 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 	if (process.env.PI_SQUARE_ACTIVE !== "1") return;
 
 	let mode: GhMode = "browse";
+	const workdir = fs.realpathSync.native(process.cwd());
 	const githubCalls = new Set<string>();
 
 	function persistMode(): void {
@@ -245,19 +234,17 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 		event.input.command = usesGit ? prefixGitToken(command, mode) : prefixGhToken(command, mode);
 	}
 
-	async function guardGitDirEdits(event: { input: { path?: string }; toolName: string }) {
+	async function guardWorkdirEdits(event: { input: { path?: string }; toolName: string }) {
 		if (mode !== "browse" || !["edit", "write"].includes(event.toolName) || typeof event.input.path !== "string") return;
-		const repoRoot = findRepoRoot();
-		if (!repoRoot) return;
-		const gitDir = fs.realpathSync.native(path.join(repoRoot, ".git"));
-		let target: string;
+		const lexicalTarget = path.resolve(process.cwd(), event.input.path);
+		let resolvedTarget: string;
 		try {
-			target = resolvedTargetPath(event.input.path);
+			resolvedTarget = resolvedTargetPath(event.input.path);
 		} catch {
-			return { block: true, reason: `GitHub mode is browse: cannot resolve ${event.input.path} for .git protection.` };
+			return { block: true, reason: `GitHub mode is browse: cannot resolve ${event.input.path} for workdir protection.` };
 		}
-		if (isInside(target, gitDir)) {
-			return { block: true, reason: "GitHub mode is browse: edits to .git are not allowed. Switch to /gh-mode local for local git repository changes." };
+		if (isInside(lexicalTarget, workdir) || isInside(resolvedTarget, workdir)) {
+			return { block: true, reason: "GitHub mode is browse: the workdir is read-only. Switch to /gh-mode local to edit files." };
 		}
 	}
 
@@ -308,7 +295,7 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 		}));
 	}
 
-	pi.on("tool_call", guardGitDirEdits);
+	pi.on("tool_call", guardWorkdirEdits);
 	pi.on("tool_call", patchGhToken);
 	pi.on("tool_result", explainFailedGithubCommand);
 }

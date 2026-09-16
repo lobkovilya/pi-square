@@ -291,7 +291,7 @@ func runGitHubSandbox(mode, workdir, command string) error {
 	cmd := exec.Command(self, ghSandboxChild, mode, workdir, command)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	cmd.Env = os.Environ()
-	cmd.SysProcAttr = namespaceAttr(unix.CLONE_NEWUSER | unix.CLONE_NEWNS)
+	cmd.SysProcAttr = namespaceAttr(unix.CLONE_NEWUSER | unix.CLONE_NEWNS | unix.CLONE_NEWPID)
 	return cmd.Run()
 }
 
@@ -299,8 +299,13 @@ func gitHubSandbox(mode, workdir, command string) error {
 	if err := unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""); err != nil {
 		return fmt.Errorf("make GitHub sandbox mounts private: %w", err)
 	}
+	// Mount proc from this child PID namespace. Otherwise /proc/<parent>/root
+	// could expose the writable workdir mount from the parent namespace.
+	if err := unix.Mount("proc", "/proc", "proc", unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, ""); err != nil {
+		return fmt.Errorf("mount private proc: %w", err)
+	}
 	if mode == "browse" {
-		if err := protectGitDir(workdir); err != nil {
+		if err := protectWorkdir(workdir); err != nil {
 			return err
 		}
 	}
@@ -332,28 +337,13 @@ func gitHubSandbox(mode, workdir, command string) error {
 	return cmd.Run()
 }
 
-func protectGitDir(workdir string) error {
-	repo, err := findRepository(workdir)
-	if err != nil {
-		return err
-	}
-	gitDir := filepath.Join(repo, ".git")
-	info, err := os.Stat(gitDir)
-	if err != nil {
-		return fmt.Errorf("inspect %s: %w", gitDir, err)
-	}
-	mountFlags := uintptr(unix.MS_BIND)
-	setFlags := uint(0)
-	if info.IsDir() {
-		mountFlags |= unix.MS_REC
-		setFlags = unix.AT_RECURSIVE
-	}
-	if err := unix.Mount(gitDir, gitDir, "", mountFlags, ""); err != nil {
-		return fmt.Errorf("protect %s: %w", gitDir, err)
+func protectWorkdir(workdir string) error {
+	if err := unix.Mount(workdir, workdir, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
+		return fmt.Errorf("protect workdir %s: %w", workdir, err)
 	}
 	attr := &unix.MountAttr{Attr_set: unix.MOUNT_ATTR_RDONLY}
-	if err := unix.MountSetattr(unix.AT_FDCWD, gitDir, setFlags, attr); err != nil {
-		return fmt.Errorf("make %s read-only: %w", gitDir, err)
+	if err := unix.MountSetattr(unix.AT_FDCWD, workdir, unix.AT_RECURSIVE, attr); err != nil {
+		return fmt.Errorf("make workdir %s read-only: %w", workdir, err)
 	}
 	return nil
 }
@@ -375,24 +365,6 @@ func hidePath(path string) error {
 		return fmt.Errorf("hide %s: %w", path, err)
 	}
 	return nil
-}
-
-func findRepository(start string) (string, error) {
-	current := filepath.Clean(start)
-	for {
-		_, err := os.Stat(filepath.Join(current, ".git"))
-		if err == nil {
-			return current, nil
-		}
-		if err != nil && !os.IsNotExist(err) {
-			return "", fmt.Errorf("inspect repository at %s: %w", current, err)
-		}
-		parent := filepath.Dir(current)
-		if parent == current {
-			return "", fmt.Errorf("no Git repository contains %s", start)
-		}
-		current = parent
-	}
 }
 
 func loadOrCreateGitHubTokens(home string) (githubTokens, error) {

@@ -18,24 +18,26 @@ filesystems. Network access and the controlling terminal are retained.
 
 The binary embeds `gh-mode.ts` and loads it only for pi processes launched by
 `pi-square`; no separate extension installation is needed. GitHub operations
-start in read-only `browse` mode. The active mode and its permissions are added
-to the model's system prompt so it does not attempt disallowed operations. Use
+start in read-only `browse` mode, in which the entire project workdir is also
+read-only. The active mode and its permissions are added to the model's system
+prompt so it does not attempt disallowed operations. Use
 `/gh-mode local` for local Git changes and `/gh-mode publish` for remote writes,
 or press Alt+Super+G to cycle modes.
 
-| Mode      | `.git`    | GitHub token | SSH agent | `$HOME`   |
-|-----------|-----------|--------------|-----------|-----------|
-| `browse`  | read-only | read-only    | hidden    | throwaway |
-| `local`   | writable  | read-only    | hidden    | throwaway |
+| Mode      | Workdir   | GitHub token    | SSH agent | `$HOME`   |
+|-----------|-----------|-----------------|-----------|-----------|
+| `browse`  | read-only | read-only       | hidden    | throwaway |
+| `local`   | writable  | read-only       | hidden    | throwaway |
 | `publish` | writable  | write (default) | available | real      |
 
 A `gh` command may explicitly select the read-only token in any mode with
 `GH_TOKEN=$PI_GH_RO_TOKEN gh ...`; `PI_GH_W_TOKEN` remains usable only in
 `publish` mode.
 
-In `browse` and `local` modes every shell command runs in a nested mount
-namespace that enforces the table above, so raw HTTP or SSH clients cannot
-bypass the mode.
+In `browse` and `local` modes every shell command runs in a nested mount and
+PID namespace that enforces the table above, so raw HTTP or SSH clients cannot
+bypass the mode. In `browse`, `edit` and `write` tool calls targeting the
+workdir are blocked as well.
 
 ## Build
 
