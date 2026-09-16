@@ -23,10 +23,11 @@ import (
 )
 
 const (
-	stageMarker    = "--pi-square-internal-stage"
-	ghBrowseMarker = "--pi-square-internal-gh-browse"
-	ghBrowseChild  = "--pi-square-internal-gh-browse-child"
-	extensionPath  = "/run/pi-square/gh-mode.ts"
+	stageMarker     = "--pi-square-internal-stage"
+	ghSandboxMarker = "--pi-square-internal-gh-sandbox"
+	ghSandboxChild  = "--pi-square-internal-gh-sandbox-child"
+	extensionPath   = "/run/pi-square/gh-mode.ts"
+	helperPath      = "/run/pi-square/pi-square"
 )
 
 //go:embed gh-mode.ts
@@ -47,12 +48,12 @@ func main() {
 		exitOnError(sandbox(os.Args[3:]))
 		return
 	}
-	if len(os.Args) == 4 && os.Args[1] == ghBrowseMarker {
-		exitOnError(runGitHubBrowseSandbox(os.Args[2], os.Args[3]))
+	if len(os.Args) == 5 && os.Args[1] == ghSandboxMarker {
+		exitOnError(runGitHubSandbox(os.Args[2], os.Args[3], os.Args[4]))
 		return
 	}
-	if len(os.Args) == 4 && os.Args[1] == ghBrowseChild {
-		exitOnError(gitHubBrowseSandbox(os.Args[2], os.Args[3]))
+	if len(os.Args) == 5 && os.Args[1] == ghSandboxChild {
+		exitOnError(gitHubSandbox(os.Args[2], os.Args[3], os.Args[4]))
 		return
 	}
 	exitOnError(run(os.Args[1:]))
@@ -94,14 +95,6 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	self, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("find pi-square executable: %w", err)
-	}
-	self, err = filepath.EvalSymlinks(self)
-	if err != nil {
-		return fmt.Errorf("resolve pi-square executable: %w", err)
-	}
 
 	tokens, err := loadOrCreateGitHubTokens(home)
 	if err != nil {
@@ -125,7 +118,7 @@ func run(args []string) error {
 		return err
 	}
 	token := hex.EncodeToString(tokenBytes)
-	uid, gid := os.Getuid(), os.Getgid()
+	uid := os.Getuid()
 	env := os.Environ()
 	for key, value := range map[string]string{
 		"PI_SQUARE_STAGE_TOKEN": token,
@@ -136,7 +129,7 @@ func run(args []string) error {
 		"PI_SQUARE_FFF":         s.dir,
 		"PI_SQUARE_HOST_UID":    strconv.Itoa(uid),
 		"PI_SQUARE_ACTIVE":      "1",
-		"PI_SQUARE_GH_HELPER":   self,
+		"PI_SQUARE_GH_HELPER":   helperPath,
 		"PI_GH_RO_TOKEN":        tokens.ReadOnly,
 		"PI_GH_W_TOKEN":         tokens.Write,
 	} {
@@ -146,13 +139,9 @@ func run(args []string) error {
 	cmd := exec.Command("/proc/self/exe", append([]string{stageMarker, token}, args...)...)
 	cmd.Env = env
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags:                 unix.CLONE_NEWUSER | unix.CLONE_NEWNS | unix.CLONE_NEWPID | unix.CLONE_NEWIPC | unix.CLONE_NEWUTS | unix.CLONE_NEWCGROUP,
-		Pdeathsig:                  syscall.SIGKILL,
-		UidMappings:                []syscall.SysProcIDMap{{ContainerID: 0, HostID: uid, Size: 1}},
-		GidMappings:                []syscall.SysProcIDMap{{ContainerID: 0, HostID: gid, Size: 1}},
-		GidMappingsEnableSetgroups: false,
-	}
+	attr := namespaceAttr(unix.CLONE_NEWUSER | unix.CLONE_NEWNS | unix.CLONE_NEWPID | unix.CLONE_NEWIPC | unix.CLONE_NEWUTS | unix.CLONE_NEWCGROUP)
+	attr.Pdeathsig = syscall.SIGKILL
+	cmd.SysProcAttr = attr
 	if err := cmd.Run(); err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
@@ -180,13 +169,10 @@ func sandbox(args []string) error {
 		return fmt.Errorf("mount sandbox root: %w", err)
 	}
 
-	for _, p := range []string{"/nix/store", "/etc", "/run/current-system", "/bin"} {
+	for _, p := range []string{"/nix/store", "/etc", "/run/current-system", "/run/wrappers", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/usr"} {
 		if err := bind(root, p, p, true, false); err != nil && !os.IsNotExist(err) {
 			return err
 		}
-	}
-	if err := bind(root, "/run/wrappers", "/run/wrappers", true, false); err != nil && !os.IsNotExist(err) {
-		return err
 	}
 	if err := mountProc(root); err != nil {
 		return err
@@ -200,19 +186,25 @@ func sandbox(args []string) error {
 	if err := writeExtension(root); err != nil {
 		return err
 	}
+	self, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("find pi-square executable: %w", err)
+	}
+	if err := bind(root, self, helperPath, true, false); err != nil {
+		return fmt.Errorf("bind pi-square helper: %w", err)
+	}
 
-	// Pi rewrites auth/session state and gh rewrites its authentication files.
+	// Pi rewrites auth/session state.
 	if err := bind(root, filepath.Join(home, ".pi"), filepath.Join(home, ".pi"), false, true); err != nil {
 		return fmt.Errorf("bind ~/.pi: %w", err)
 	}
-	for _, p := range []string{filepath.Join(home, ".gitconfig"), filepath.Join(home, ".config/git"), filepath.Join(home, ".ssh")} {
+	// SSH private keys and gh's hosts.yml are deliberately left out: ssh
+	// authenticates through the agent socket and gh through the mode tokens.
+	for _, p := range []string{".gitconfig", ".config/git", ".ssh/config", ".ssh/known_hosts", ".config/gh/config.yml"} {
+		p = filepath.Join(home, p)
 		if err := bind(root, p, p, true, false); err != nil && !os.IsNotExist(err) {
 			return err
 		}
-	}
-	gh := filepath.Join(home, ".config/gh")
-	if err := bind(root, gh, gh, false, true); err != nil && !os.IsNotExist(err) {
-		return err
 	}
 
 	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
@@ -266,31 +258,76 @@ func sandbox(args []string) error {
 	return unix.Exec(pi, argv, cleanEnv(os.Environ()))
 }
 
-func runGitHubBrowseSandbox(workdir, command string) error {
+// The child keeps its real uid, so the exec into the sandbox stage would drop
+// every capability; ambient capabilities carry the two the stage needs.
+func namespaceAttr(cloneFlags uintptr) *syscall.SysProcAttr {
+	uid, gid := os.Getuid(), os.Getgid()
+	return &syscall.SysProcAttr{
+		Cloneflags:                 cloneFlags,
+		UidMappings:                []syscall.SysProcIDMap{{ContainerID: uid, HostID: uid, Size: 1}},
+		GidMappings:                []syscall.SysProcIDMap{{ContainerID: gid, HostID: gid, Size: 1}},
+		GidMappingsEnableSetgroups: false,
+		AmbientCaps:                []uintptr{unix.CAP_SYS_ADMIN, unix.CAP_SETPCAP},
+	}
+}
+
+func runGitHubSandbox(mode, workdir, command string) error {
+	if mode != "browse" && mode != "local" {
+		return fmt.Errorf("unsupported GitHub sandbox mode %q", mode)
+	}
 	workdir, err := filepath.EvalSymlinks(workdir)
 	if err != nil {
-		return fmt.Errorf("resolve browse sandbox workdir: %w", err)
+		return fmt.Errorf("resolve GitHub sandbox workdir: %w", err)
 	}
 	self, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("find pi-square executable: %w", err)
 	}
-	cmd := exec.Command(self, ghBrowseChild, workdir, command)
+	cmd := exec.Command(self, ghSandboxChild, mode, workdir, command)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	cmd.Env = os.Environ()
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags:                 unix.CLONE_NEWUSER | unix.CLONE_NEWNS,
-		UidMappings:                []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getuid(), Size: 1}},
-		GidMappings:                []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getgid(), Size: 1}},
-		GidMappingsEnableSetgroups: false,
-	}
+	cmd.SysProcAttr = namespaceAttr(unix.CLONE_NEWUSER | unix.CLONE_NEWNS)
 	return cmd.Run()
 }
 
-func gitHubBrowseSandbox(workdir, command string) error {
+func gitHubSandbox(mode, workdir, command string) error {
 	if err := unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""); err != nil {
-		return fmt.Errorf("make browse sandbox mounts private: %w", err)
+		return fmt.Errorf("make GitHub sandbox mounts private: %w", err)
 	}
+	if mode == "browse" {
+		if err := protectGitDir(workdir); err != nil {
+			return err
+		}
+	}
+	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
+		if err := hidePath(sock); err != nil {
+			return err
+		}
+	}
+	if err := os.Chdir(workdir); err != nil {
+		return fmt.Errorf("enter GitHub sandbox workdir: %w", err)
+	}
+	home, err := os.MkdirTemp("", "pi-gh-mode-home-")
+	if err != nil {
+		return fmt.Errorf("create GitHub sandbox home: %w", err)
+	}
+	defer os.RemoveAll(home)
+	env := setEnv(os.Environ(), "HOME", home)
+	env = unsetEnv(env, "SSH_AUTH_SOCK", "PI_GH_W_TOKEN")
+	if err := dropCapabilities(); err != nil {
+		return fmt.Errorf("drop GitHub sandbox capabilities: %w", err)
+	}
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		return errors.New("bash not found in PATH")
+	}
+	cmd := exec.Command(bash, "-lc", command)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	cmd.Env = env
+	return cmd.Run()
+}
+
+func protectGitDir(workdir string) error {
 	repo, err := findRepository(workdir)
 	if err != nil {
 		return err
@@ -313,24 +350,26 @@ func gitHubBrowseSandbox(workdir, command string) error {
 	if err := unix.MountSetattr(unix.AT_FDCWD, gitDir, setFlags, attr); err != nil {
 		return fmt.Errorf("make %s read-only: %w", gitDir, err)
 	}
-	if err := os.Chdir(workdir); err != nil {
-		return fmt.Errorf("enter browse sandbox workdir: %w", err)
+	return nil
+}
+
+// Unsetting SSH_AUTH_SOCK alone is not enough: the socket path is guessable,
+// so mask the socket itself with /dev/null.
+func hidePath(path string) error {
+	st, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return nil
 	}
-	home, err := os.MkdirTemp("", "pi-gh-mode-home-")
 	if err != nil {
-		return fmt.Errorf("create browse sandbox home: %w", err)
+		return err
 	}
-	defer os.RemoveAll(home)
-	env := setEnv(os.Environ(), "HOME", home)
-	env = unsetEnv(env, "SSH_AUTH_SOCK", "PI_GH_W_TOKEN")
-	if err := dropCapabilities(); err != nil {
-		return fmt.Errorf("drop browse sandbox capabilities: %w", err)
+	if st.IsDir() {
+		return fmt.Errorf("hide %s: is a directory", path)
 	}
-	bash := "/run/current-system/sw/bin/bash"
-	cmd := exec.Command(bash, "-lc", command)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	cmd.Env = env
-	return cmd.Run()
+	if err := unix.Mount("/dev/null", path, "", unix.MS_BIND, ""); err != nil {
+		return fmt.Errorf("hide %s: %w", path, err)
+	}
+	return nil
 }
 
 func findRepository(start string) (string, error) {
@@ -460,10 +499,6 @@ func writeExtension(root string) error {
 }
 
 func dropCapabilities() error {
-	// Prevent namespace-root special handling from restoring capabilities on exec.
-	if err := unix.Prctl(unix.PR_SET_SECUREBITS, uintptr(1<<0|1<<1), 0, 0, 0); err != nil {
-		return err
-	}
 	for capability := 0; capability <= 63; capability++ {
 		if err := unix.Prctl(unix.PR_CAPBSET_DROP, uintptr(capability), 0, 0, 0); err != nil && err != unix.EINVAL {
 			return err

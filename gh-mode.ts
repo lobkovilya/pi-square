@@ -146,11 +146,9 @@ function modeSandbox(command: string, mode: GhMode): string {
 	const repoRoot = findRepoRoot();
 	if (!repoRoot) return command;
 
-	const setup = [
-		"export GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0",
-		mode === "local" ? "export GIT_ASKPASS=/bin/false GIT_SSH_COMMAND='sh -c \"exit 1\"' GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0=" : "",
-	];
+	const setup = ["export GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0"];
 	if (mode === "local") {
+		setup.push("export GIT_ASKPASS=false GIT_SSH_COMMAND='sh -c \"exit 1\"' GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0=");
 		for (const [key, value] of Object.entries(gitIdentityEnv())) {
 			setup.push(`export ${key}=${shellQuote(value)}`);
 		}
@@ -158,15 +156,11 @@ function modeSandbox(command: string, mode: GhMode): string {
 	setup.push(command);
 	const wrapped = setup.join("; ");
 
-	if (mode === "browse") {
-		const helper = process.env.PI_SQUARE_GH_HELPER;
-		if (!helper) {
-			return "printf '%s\\n' 'GitHub browse sandbox helper is not configured.' >&2; exit 127";
-		}
-		return [helper, "--pi-square-internal-gh-browse", process.cwd(), wrapped].map(shellQuote).join(" ");
+	const helper = process.env.PI_SQUARE_GH_HELPER;
+	if (!helper) {
+		return "printf '%s\\n' 'GitHub mode sandbox helper is not configured.' >&2; exit 127";
 	}
-
-	return `tmp_home="$(mktemp -d)"; trap 'rm -rf "$tmp_home"' EXIT; HOME="$tmp_home" env -u SSH_AUTH_SOCK -u ${W_TOKEN_ENV} /run/current-system/sw/bin/bash -lc ${shellQuote(wrapped)}`;
+	return [helper, "--pi-square-internal-gh-sandbox", mode, process.cwd(), wrapped].map(shellQuote).join(" ");
 }
 
 export default function ghModeExtension(pi: ExtensionAPI): void {
