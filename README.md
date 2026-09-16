@@ -18,8 +18,10 @@ filesystems. Network access and the controlling terminal are retained.
 
 The binary embeds `gh-mode.ts` and loads it only for pi processes launched by
 `pi-square`; no separate extension installation is needed. GitHub operations
-start in read-only `browse` mode. Use `/gh-mode local` for local Git changes
-and `/gh-mode publish` for remote writes, or press Alt+Super+G to cycle modes.
+start in read-only `browse` mode. The active mode and its permissions are added
+to the model's system prompt so it does not attempt disallowed operations. Use
+`/gh-mode local` for local Git changes and `/gh-mode publish` for remote writes,
+or press Alt+Super+G to cycle modes.
 
 | Mode      | `.git`    | GitHub token | SSH agent | `$HOME`   |
 |-----------|-----------|--------------|-----------|-----------|
@@ -60,12 +62,15 @@ pi-square [options] [-- pi arguments...]
 
 pi-square --version       # pi-square version
 pi-square --help          # pi-square help
+pi-square --mode=dev      # sandbox normally, without GitHub mode prompt guidance
 pi-square -- --version    # pi version
 pi-square -- --model example "Explain this project"
 ```
 
 All pi arguments (including prompts) must follow `--`. Running `pi-square`
-without arguments starts pi normally. Versions use
+without arguments starts pi normally. `--mode=dev` keeps the sandbox and
+GitHub-mode enforcement active but omits mode information from the model's
+system prompt, which is useful for testing sandbox behavior. Versions use
 `0.0.0-preview.v<shortCommitHash>` for both Nix and local `go build` builds.
 If Git revision metadata is unavailable, the hash is `unknown`. Override the
 version with `go build -ldflags "-X main.version=VERSION" -o pi-square .`.

@@ -32,7 +32,7 @@ func buildVersion() string {
 	return prefix + "unknown"
 }
 
-func runCLI(args []string, out io.Writer, launch func([]string) error) error {
+func runCLI(args []string, out io.Writer, launch func([]string, bool) error) error {
 	var piArgs []string
 	for i, arg := range args {
 		if arg == "--" {
@@ -47,19 +47,23 @@ func runCLI(args []string, out io.Writer, launch func([]string) error) error {
 	showVersion := flags.Bool("version", false, "Show pi-square version")
 	showHelp := flags.Bool("help", false, "Show help")
 	flags.BoolVar(showHelp, "h", false, "Show help")
+	mode := flags.String("mode", "", "Wrapper mode (dev disables GitHub mode prompt guidance)")
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("%v; pass pi arguments after --", err)
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected argument %q; pass pi arguments after --", flags.Arg(0))
 	}
+	if *mode != "" && *mode != "dev" {
+		return fmt.Errorf("unsupported mode %q; expected dev", *mode)
+	}
 	if *showHelp {
-		_, err := fmt.Fprint(out, "Usage: pi-square [options] [-- pi arguments...]\n\nOptions:\n  --version   Show pi-square version\n  --help, -h  Show help\n\nPass arguments to pi after --, e.g. pi-square -- --version.\n")
+		_, err := fmt.Fprint(out, "Usage: pi-square [options] [-- pi arguments...]\n\nOptions:\n  --mode=dev  Disable GitHub mode prompt guidance (sandbox remains active)\n  --version   Show pi-square version\n  --help, -h  Show help\n\nPass arguments to pi after --, e.g. pi-square -- --version.\n")
 		return err
 	}
 	if *showVersion {
 		_, err := fmt.Fprintln(out, "pi-square", version)
 		return err
 	}
-	return launch(piArgs)
+	return launch(piArgs, *mode == "dev")
 }

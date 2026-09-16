@@ -28,6 +28,15 @@ function tokenEnvName(mode: GhMode): string {
 	return mode === "publish" ? W_TOKEN_ENV : RO_TOKEN_ENV;
 }
 
+function modePrompt(mode: GhMode): string {
+	const permission = mode === "browse"
+		? "You may inspect GitHub and repository state, but local Git metadata and remote GitHub state are read-only."
+		: mode === "local"
+			? "Local Git changes are allowed, but remote GitHub state is read-only."
+			: "Local Git changes and remote GitHub writes are allowed.";
+	return `GitHub safety mode: ${mode}. ${permission} Do not create, edit, close, or otherwise modify GitHub issues, pull requests, releases, or other remote state unless the mode is publish. The user can switch modes with /gh-mode.`;
+}
+
 function explicitGhTokenEnv(command: string): string | undefined {
 	for (const token of tokenize(command)) {
 		if (!token.startsWith("GH_TOKEN=")) continue;
@@ -222,7 +231,7 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 				event.input.command = modeSandbox(usesGit ? prefixGitToken(command, mode) : `unset ${W_TOKEN_ENV}; ${prefixGhToken(command, mode)}`, mode);
 				return;
 			}
-			event.input.command = modeSandbox(`unset ${W_TOKEN_ENV}; ${command}`, mode);
+			event.input.command = modeSandbox(`unset GH_TOKEN ${W_TOKEN_ENV}; ${command}`, mode);
 			return;
 		}
 
@@ -292,6 +301,12 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 		mode = restoreMode(ctx, "browse");
 		updateStatus(ctx);
 	});
+
+	if (process.env.PI_SQUARE_DEV_MODE !== "1") {
+		pi.on("before_agent_start", async (event) => ({
+			systemPrompt: `${event.systemPrompt}\n\n${modePrompt(mode)}`,
+		}));
+	}
 
 	pi.on("tool_call", guardGitDirEdits);
 	pi.on("tool_call", patchGhToken);

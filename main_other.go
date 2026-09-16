@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	if err := runCLI(os.Args[1:], os.Stdout, func([]string) error {
+	if err := runCLI(os.Args[1:], os.Stdout, func([]string, bool) error {
 		return fmt.Errorf("Linux is required")
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "pi-square: %v\n", err)

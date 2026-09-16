@@ -75,7 +75,7 @@ func fatal(err error) {
 	os.Exit(1)
 }
 
-func run(args []string) error {
+func run(args []string, devMode bool) error {
 	workdir, err := filepath.EvalSymlinks(mustAbs("."))
 	if err != nil {
 		return fmt.Errorf("resolve workdir: %w", err)
@@ -120,6 +120,10 @@ func run(args []string) error {
 	token := hex.EncodeToString(tokenBytes)
 	uid := os.Getuid()
 	env := os.Environ()
+	devModeValue := "0"
+	if devMode {
+		devModeValue = "1"
+	}
 	for key, value := range map[string]string{
 		"PI_SQUARE_STAGE_TOKEN": token,
 		"PI_SQUARE_ROOT":        root,
@@ -129,6 +133,7 @@ func run(args []string) error {
 		"PI_SQUARE_FFF":         s.dir,
 		"PI_SQUARE_HOST_UID":    strconv.Itoa(uid),
 		"PI_SQUARE_ACTIVE":      "1",
+		"PI_SQUARE_DEV_MODE":    devModeValue,
 		"PI_SQUARE_GH_HELPER":   helperPath,
 		"PI_GH_RO_TOKEN":        tokens.ReadOnly,
 		"PI_GH_W_TOKEN":         tokens.Write,
