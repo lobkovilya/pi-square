@@ -195,9 +195,8 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 	}
 
 	function updateStatus(ctx: ExtensionContext): void {
-		const text = `${GITHUB_ICON} [${mode}]`;
 		const color = mode === "browse" ? "success" : mode === "local" ? "accent" : "warning";
-		ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg(color, text));
+		ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg(color, mode));
 	}
 
 	async function patchGhToken(event: { input: { command?: string }; toolName: string; toolCallId: string }) {
