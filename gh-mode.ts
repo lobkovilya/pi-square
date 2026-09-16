@@ -97,11 +97,6 @@ function shellQuote(value: string): string {
 	return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
-function commandExists(command: string): boolean {
-	const result = spawnSync("/run/current-system/sw/bin/sh", ["-c", `command -v ${shellQuote(command)} >/dev/null 2>&1`], { stdio: "ignore" });
-	return result.status === 0;
-}
-
 function gitConfigValue(key: string): string | undefined {
 	const result = spawnSync("git", ["config", "--get", key], { encoding: "utf8" });
 	if (result.status !== 0) return undefined;
@@ -150,38 +145,28 @@ function modeSandbox(command: string, mode: GhMode): string {
 	if (mode === "publish") return command;
 	const repoRoot = findRepoRoot();
 	if (!repoRoot) return command;
-	if (!commandExists("bwrap")) {
-		return "printf '%s\\n' 'GitHub mode requires bubblewrap (bwrap), but it is not installed or not in PATH.' >&2; exit 127";
-	}
 
-	const gitDir = path.join(repoRoot, ".git");
 	const setup = [
-		"mkdir -p \"$HOME\"",
-		`cd ${shellQuote(process.cwd())}`,
 		"export GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0",
 		mode === "local" ? "export GIT_ASKPASS=/bin/false GIT_SSH_COMMAND='sh -c \"exit 1\"' GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0=" : "",
-		`exec /run/current-system/sw/bin/bash -lc ${shellQuote(command)}`,
-	]
-		.filter(Boolean)
-		.join("; ");
-
-	const args = [
-		"bwrap",
-		"--bind", "/", "/",
-		"--dev-bind", "/dev", "/dev",
-		"--tmpfs", "/tmp",
-		"--setenv", "HOME", "/tmp/pi-gh-mode-home",
-		"--unsetenv", "SSH_AUTH_SOCK",
-		"--unsetenv", W_TOKEN_ENV,
 	];
 	if (mode === "local") {
 		for (const [key, value] of Object.entries(gitIdentityEnv())) {
-			args.push("--setenv", key, value);
+			setup.push(`export ${key}=${shellQuote(value)}`);
 		}
 	}
-	if (mode === "browse") args.push("--ro-bind", gitDir, gitDir);
-	args.push("/run/current-system/sw/bin/bash", "-lc", setup);
-	return args.map(shellQuote).join(" ");
+	setup.push(command);
+	const wrapped = setup.join("; ");
+
+	if (mode === "browse") {
+		const helper = process.env.PI_SQUARE_GH_HELPER;
+		if (!helper) {
+			return "printf '%s\\n' 'GitHub browse sandbox helper is not configured.' >&2; exit 127";
+		}
+		return [helper, "--pi-square-internal-gh-browse", process.cwd(), wrapped].map(shellQuote).join(" ");
+	}
+
+	return `tmp_home="$(mktemp -d)"; trap 'rm -rf "$tmp_home"' EXIT; HOME="$tmp_home" env -u SSH_AUTH_SOCK -u ${W_TOKEN_ENV} /run/current-system/sw/bin/bash -lc ${shellQuote(wrapped)}`;
 }
 
 export default function ghModeExtension(pi: ExtensionAPI): void {

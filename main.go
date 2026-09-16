@@ -23,8 +23,10 @@ import (
 )
 
 const (
-	stageMarker   = "--pi-square-internal-stage"
-	extensionPath = "/run/pi-square/gh-mode.ts"
+	stageMarker    = "--pi-square-internal-stage"
+	ghBrowseMarker = "--pi-square-internal-gh-browse"
+	ghBrowseChild  = "--pi-square-internal-gh-browse-child"
+	extensionPath  = "/run/pi-square/gh-mode.ts"
 )
 
 //go:embed gh-mode.ts
@@ -42,18 +44,29 @@ type slot struct {
 
 func main() {
 	if len(os.Args) >= 3 && os.Args[1] == stageMarker && os.Getenv("PI_SQUARE_STAGE_TOKEN") == os.Args[2] {
-		if err := sandbox(os.Args[3:]); err != nil {
-			fatal(err)
-		}
+		exitOnError(sandbox(os.Args[3:]))
 		return
 	}
-	if err := run(os.Args[1:]); err != nil {
-		var exit *exec.ExitError
-		if errors.As(err, &exit) {
-			os.Exit(exit.ExitCode())
-		}
-		fatal(err)
+	if len(os.Args) == 4 && os.Args[1] == ghBrowseMarker {
+		exitOnError(runGitHubBrowseSandbox(os.Args[2], os.Args[3]))
+		return
 	}
+	if len(os.Args) == 4 && os.Args[1] == ghBrowseChild {
+		exitOnError(gitHubBrowseSandbox(os.Args[2], os.Args[3]))
+		return
+	}
+	exitOnError(run(os.Args[1:]))
+}
+
+func exitOnError(err error) {
+	if err == nil {
+		return
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		os.Exit(exit.ExitCode())
+	}
+	fatal(err)
 }
 
 func fatal(err error) {
@@ -80,6 +93,14 @@ func run(args []string) error {
 	pi, err = filepath.Abs(pi)
 	if err != nil {
 		return err
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("find pi-square executable: %w", err)
+	}
+	self, err = filepath.EvalSymlinks(self)
+	if err != nil {
+		return fmt.Errorf("resolve pi-square executable: %w", err)
 	}
 
 	tokens, err := loadOrCreateGitHubTokens(home)
@@ -115,6 +136,7 @@ func run(args []string) error {
 		"PI_SQUARE_FFF":         s.dir,
 		"PI_SQUARE_HOST_UID":    strconv.Itoa(uid),
 		"PI_SQUARE_ACTIVE":      "1",
+		"PI_SQUARE_GH_HELPER":   self,
 		"PI_GH_RO_TOKEN":        tokens.ReadOnly,
 		"PI_GH_W_TOKEN":         tokens.Write,
 	} {
@@ -242,6 +264,91 @@ func sandbox(args []string) error {
 	}
 	argv := append([]string{"pi", "--extension", extensionPath}, args...)
 	return unix.Exec(pi, argv, cleanEnv(os.Environ()))
+}
+
+func runGitHubBrowseSandbox(workdir, command string) error {
+	workdir, err := filepath.EvalSymlinks(workdir)
+	if err != nil {
+		return fmt.Errorf("resolve browse sandbox workdir: %w", err)
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("find pi-square executable: %w", err)
+	}
+	cmd := exec.Command(self, ghBrowseChild, workdir, command)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	cmd.Env = os.Environ()
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Cloneflags:                 unix.CLONE_NEWUSER | unix.CLONE_NEWNS,
+		UidMappings:                []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getuid(), Size: 1}},
+		GidMappings:                []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getgid(), Size: 1}},
+		GidMappingsEnableSetgroups: false,
+	}
+	return cmd.Run()
+}
+
+func gitHubBrowseSandbox(workdir, command string) error {
+	if err := unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""); err != nil {
+		return fmt.Errorf("make browse sandbox mounts private: %w", err)
+	}
+	repo, err := findRepository(workdir)
+	if err != nil {
+		return err
+	}
+	gitDir := filepath.Join(repo, ".git")
+	info, err := os.Stat(gitDir)
+	if err != nil {
+		return fmt.Errorf("inspect %s: %w", gitDir, err)
+	}
+	mountFlags := uintptr(unix.MS_BIND)
+	setFlags := uint(0)
+	if info.IsDir() {
+		mountFlags |= unix.MS_REC
+		setFlags = unix.AT_RECURSIVE
+	}
+	if err := unix.Mount(gitDir, gitDir, "", mountFlags, ""); err != nil {
+		return fmt.Errorf("protect %s: %w", gitDir, err)
+	}
+	attr := &unix.MountAttr{Attr_set: unix.MOUNT_ATTR_RDONLY}
+	if err := unix.MountSetattr(unix.AT_FDCWD, gitDir, setFlags, attr); err != nil {
+		return fmt.Errorf("make %s read-only: %w", gitDir, err)
+	}
+	if err := os.Chdir(workdir); err != nil {
+		return fmt.Errorf("enter browse sandbox workdir: %w", err)
+	}
+	home, err := os.MkdirTemp("", "pi-gh-mode-home-")
+	if err != nil {
+		return fmt.Errorf("create browse sandbox home: %w", err)
+	}
+	defer os.RemoveAll(home)
+	env := setEnv(os.Environ(), "HOME", home)
+	env = unsetEnv(env, "SSH_AUTH_SOCK", "PI_GH_W_TOKEN")
+	if err := dropCapabilities(); err != nil {
+		return fmt.Errorf("drop browse sandbox capabilities: %w", err)
+	}
+	bash := "/run/current-system/sw/bin/bash"
+	cmd := exec.Command(bash, "-lc", command)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	cmd.Env = env
+	return cmd.Run()
+}
+
+func findRepository(start string) (string, error) {
+	current := filepath.Clean(start)
+	for {
+		_, err := os.Stat(filepath.Join(current, ".git"))
+		if err == nil {
+			return current, nil
+		}
+		if err != nil && !os.IsNotExist(err) {
+			return "", fmt.Errorf("inspect repository at %s: %w", current, err)
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", fmt.Errorf("no Git repository contains %s", start)
+		}
+		current = parent
+	}
 }
 
 func loadOrCreateGitHubTokens(home string) (githubTokens, error) {
@@ -491,14 +598,33 @@ func setEnv(env []string, key, value string) []string {
 	return append(out, prefix+value)
 }
 
-func cleanEnv(env []string) []string {
+func unsetEnv(env []string, keys ...string) []string {
 	out := env[:0]
 	for _, item := range env {
-		if !strings.HasPrefix(item, "PI_SQUARE_STAGE_TOKEN=") && !strings.HasPrefix(item, "PI_SQUARE_ROOT=") && !strings.HasPrefix(item, "PI_SQUARE_WORKDIR=") && !strings.HasPrefix(item, "PI_SQUARE_HOME=") && !strings.HasPrefix(item, "PI_SQUARE_PI=") && !strings.HasPrefix(item, "PI_SQUARE_FFF=") && !strings.HasPrefix(item, "PI_SQUARE_HOST_UID=") {
+		keep := true
+		for _, key := range keys {
+			if strings.HasPrefix(item, key+"=") {
+				keep = false
+				break
+			}
+		}
+		if keep {
 			out = append(out, item)
 		}
 	}
 	return out
+}
+
+func cleanEnv(env []string) []string {
+	return unsetEnv(env,
+		"PI_SQUARE_STAGE_TOKEN",
+		"PI_SQUARE_ROOT",
+		"PI_SQUARE_WORKDIR",
+		"PI_SQUARE_HOME",
+		"PI_SQUARE_PI",
+		"PI_SQUARE_FFF",
+		"PI_SQUARE_HOST_UID",
+	)
 }
 
 func mustAbs(path string) string {

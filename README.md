@@ -23,6 +23,13 @@ go build -o pi-square .
 The kernel must permit unprivileged user namespaces. No setuid helper or
 runtime sandbox dependency is used.
 
+A Nix flake is also provided for x86-64 and AArch64 Linux:
+
+```sh
+nix build
+nix run .
+```
+
 ## Use
 
 Run it from a project directory:
