@@ -28,7 +28,19 @@ function tokenEnvName(mode: GhMode): string {
 	return mode === "publish" ? W_TOKEN_ENV : RO_TOKEN_ENV;
 }
 
+function explicitGhTokenEnv(command: string): string | undefined {
+	for (const token of tokenize(command)) {
+		if (!token.startsWith("GH_TOKEN=")) continue;
+		const value = token.slice("GH_TOKEN=".length);
+		if (value === `$${RO_TOKEN_ENV}` || value === `\${${RO_TOKEN_ENV}}`) return RO_TOKEN_ENV;
+		if (value === `$${W_TOKEN_ENV}` || value === `\${${W_TOKEN_ENV}}`) return W_TOKEN_ENV;
+	}
+	return undefined;
+}
+
 function prefixGhToken(command: string, mode: GhMode): string {
+	const explicitTokenEnv = explicitGhTokenEnv(command);
+	if (explicitTokenEnv) return `unset GH_TOKEN; ${command}`;
 	const tokenEnv = tokenEnvName(mode);
 	return `export GH_TOKEN="\${${tokenEnv}}"; ${command}`;
 }
@@ -201,7 +213,10 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 		// $PI_GH_W_TOKEN. gh always uses the read-only token outside publish mode.
 		if (mode !== "publish") {
 			if (usesGithub) {
-				const tokenEnv = tokenEnvName(mode);
+				const tokenEnv = usesGh ? explicitGhTokenEnv(command) || tokenEnvName(mode) : tokenEnvName(mode);
+				if (tokenEnv === W_TOKEN_ENV) {
+					return { block: true, reason: `GitHub mode is ${mode}: ${W_TOKEN_ENV} is only available in publish mode.` };
+				}
 				if (usesGh && !process.env[tokenEnv]) {
 					return { block: true, reason: `GitHub ${mode} token is not configured. Set ${tokenEnv}.` };
 				}
@@ -214,7 +229,7 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 
 		if (!usesGithub) return;
 
-		const tokenEnv = tokenEnvName(mode);
+		const tokenEnv = usesGh ? explicitGhTokenEnv(command) || tokenEnvName(mode) : tokenEnvName(mode);
 		if (!process.env[tokenEnv]) {
 			return { block: true, reason: `GitHub ${mode} token is not configured. Set ${tokenEnv}.` };
 		}

@@ -25,7 +25,11 @@ and `/gh-mode publish` for remote writes, or press Alt+Super+G to cycle modes.
 |-----------|-----------|--------------|-----------|-----------|
 | `browse`  | read-only | read-only    | hidden    | throwaway |
 | `local`   | writable  | read-only    | hidden    | throwaway |
-| `publish` | writable  | write        | available | real      |
+| `publish` | writable  | write (default) | available | real      |
+
+A `gh` command may explicitly select the read-only token in any mode with
+`GH_TOKEN=$PI_GH_RO_TOKEN gh ...`; `PI_GH_W_TOKEN` remains usable only in
+`publish` mode.
 
 In `browse` and `local` modes every shell command runs in a nested mount
 namespace that enforces the table above, so raw HTTP or SSH clients cannot
