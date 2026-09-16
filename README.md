@@ -56,8 +56,19 @@ nix run .
 Run it from a project directory:
 
 ```sh
-pi-square [pi arguments...]
+pi-square [options] [-- pi arguments...]
+
+pi-square --version       # pi-square version
+pi-square --help          # pi-square help
+pi-square -- --version    # pi version
+pi-square -- --model example "Explain this project"
 ```
+
+All pi arguments (including prompts) must follow `--`. Running `pi-square`
+without arguments starts pi normally. Versions use
+`0.0.0-preview.v<shortCommitHash>` for both Nix and local `go build` builds.
+If Git revision metadata is unavailable, the hash is `unknown`. Override the
+version with `go build -ldflags "-X main.version=VERSION" -o pi-square .`.
 
 On the first run, `pi-square` asks (without echoing input) for a read-only
 GitHub token and a write-capable GitHub token. It stores them in

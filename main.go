@@ -56,7 +56,7 @@ func main() {
 		exitOnError(gitHubSandbox(os.Args[2], os.Args[3], os.Args[4]))
 		return
 	}
-	exitOnError(run(os.Args[1:]))
+	exitOnError(runCLI(os.Args[1:], os.Stdout, run))
 }
 
 func exitOnError(err error) {

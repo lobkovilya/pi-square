@@ -2,8 +2,16 @@
 
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+)
 
 func main() {
-	fmt.Println("pi-square: Linux is required")
+	if err := runCLI(os.Args[1:], os.Stdout, func([]string) error {
+		return fmt.Errorf("Linux is required")
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "pi-square: %v\n", err)
+		os.Exit(1)
+	}
 }

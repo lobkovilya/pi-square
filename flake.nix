@@ -17,14 +17,15 @@
           pkgs = nixpkgs.legacyPackages.${system};
         in
         {
-          default = pkgs.buildGoModule {
+          default = pkgs.buildGoModule rec {
             pname = "pi-square";
-            version = "0-unstable-${self.lastModifiedDate or "19700101"}";
+            version = "0.0.0-preview.v${pkgs.lib.removeSuffix "-dirty" (self.shortRev or self.dirtyShortRev or "unknown")}";
 
             src = self;
             vendorHash = "sha256-iDdw6zI2xSUn7So07uXHqDFaopvdYjypqYH/M/tVid0=";
 
             subPackages = [ "." ];
+            ldflags = [ "-X main.version=${version}" ];
 
             meta = {
               description = "Linux namespace sandbox for pi";
