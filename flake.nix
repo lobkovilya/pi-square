@@ -22,7 +22,7 @@
             version = "0.0.0-preview.v${pkgs.lib.removeSuffix "-dirty" (self.shortRev or self.dirtyShortRev or "unknown")}";
 
             src = self;
-            vendorHash = "sha256-iDdw6zI2xSUn7So07uXHqDFaopvdYjypqYH/M/tVid0=";
+            vendorHash = "sha256-ICVUFyzXUrXHfLYdveWnxaLK/DaDauo6swCaYNDNhbc=";
 
             subPackages = [ "." ];
             ldflags = [ "-X main.version=${version}" ];

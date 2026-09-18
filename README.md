@@ -1,7 +1,8 @@
 # pi-square
 
 `pi-square` runs [pi](https://github.com/earendil-works/pi) in a Linux
-user/mount/PID namespace. The project directory is writable, while the host
+user/mount/PID namespace and routes every shell command it launches through a
+mandatory GitHub API gateway. The project directory is writable, while the host
 filesystem is replaced by a small set of read-only system mounts: `/etc`,
 `/usr`, `/bin`, `/sbin`, `/lib`, `/lib32`, `/lib64`, and on NixOS
 `/nix/store`, `/run/current-system`, and `/run/wrappers`, whichever exist.
@@ -10,34 +11,81 @@ directory is not exposed.
 
 The only persistent writable exception is `~/.pi` (pi auth and sessions).
 `~/.gitconfig`, `~/.config/git`, `~/.ssh/config`, `~/.ssh/known_hosts`, and
-`~/.config/gh/config.yml` are mounted read-only when present. SSH private keys
-and `~/.config/gh/hosts.yml` are never mounted: SSH authenticates through the
-forwarded `$SSH_AUTH_SOCK` agent socket, and GitHub authenticates with the
-tokens described below. `/tmp` and `$XDG_RUNTIME_DIR` are private temporary
-filesystems. Network access and the controlling terminal are retained.
+`~/.config/gh/config.yml` are mounted read-only when present. GitHub
+credentials never enter the sandbox: the gateway holds the host `gh`
+credential and adds it to approved requests itself. `/tmp` and
+`$XDG_RUNTIME_DIR` are private temporary filesystems.
 
 The binary embeds `gh-mode.ts` and loads it only for pi processes launched by
-`pi-square`; no separate extension installation is needed. GitHub operations
-start in read-only `browse` mode, in which the entire project workdir is also
-read-only. The active mode and its permissions are added to the model's system
-prompt so it does not attempt disallowed operations. Use
-`/gh-mode local` for local Git changes and `/gh-mode publish` for remote writes,
-or press Alt+Super+G to cycle modes.
+`pi-square`; no separate extension installation is needed.
 
-| Mode      | Workdir   | GitHub token    | SSH agent | `$HOME`   |
-|-----------|-----------|-----------------|-----------|-----------|
-| `browse`  | read-only | read-only       | hidden    | throwaway |
-| `local`   | writable  | read-only       | hidden    | throwaway |
-| `publish` | writable  | write (default) | available | real      |
+## Permission model
 
-A `gh` command may explicitly select the read-only token in any mode with
-`GH_TOKEN=$PI_GH_RO_TOKEN gh ...`; `PI_GH_W_TOKEN` remains usable only in
-`publish` mode.
+GitHub operations start in read-only `browse` mode. Use `/gh-mode local` for
+local Git changes and `/gh-mode publish` for remote writes, or press
+Alt+Super+G to cycle modes.
 
-In `browse` and `local` modes every shell command runs in a nested mount and
-PID namespace that enforces the table above, so raw HTTP or SSH clients cannot
-bypass the mode. In `browse`, `edit` and `write` tool calls targeting the
-workdir are blocked as well.
+| Mode      | Workdir   | Shell network                                    |
+|-----------|-----------|--------------------------------------------------|
+| `browse`  | read-only | `api.github.com` REST GET/HEAD and GraphQL queries |
+| `local`   | writable  | `api.github.com` REST GET/HEAD and GraphQL queries |
+| `publish` | writable  | adds REST writes and GraphQL mutations           |
+
+GitHub authentication is not the read boundary. The gateway enforces which
+operations are permitted before forwarding them upstream, so a read-only mode
+stays read-only regardless of the credential's scopes.
+
+Only `api.github.com:443` is reachable, and only through the gateway. Git
+transport, SSH, Git LFS, registries, release asset hosts, raw-content hosts,
+and every other network destination are unsupported from commands. Direct
+connections, alternative proxies, and proxy bypass do not work; a command that
+ignores the proxy simply fails.
+
+### Downgrade behavior
+
+Permissions are assigned when a command launches and stay fixed for its
+lifetime. Switching away from `publish` affects future commands only:
+write-enabled commands that are already running, including background
+descendants, keep write access until they exit. Switching into `publish` does
+not grant write access to commands that already started in a read-only mode; a
+denied request stays denied, so the agent must launch a new command after the
+mode changes.
+
+When a command is denied because it performs a write, `gh-mode` offers to
+switch to `publish` or keep the current mode. Accepting the switch does not
+replay the command; the agent launches it again.
+
+## Trust boundary
+
+Pi and the bundled extension are trusted and keep normal host networking so pi
+can reach its model provider. Every shell command, in every mode, runs through
+the isolated command runner and can reach nothing but the gateway.
+
+A trusted supervisor owns the network namespaces, the gateway, and command
+execution. Pi asks it to launch commands over a private control channel that
+launched commands cannot reach. Commands run capability-less in their own
+network, mount, and PID namespaces; they never receive real GitHub
+credentials, the gateway's TLS keys, the control channel, or a handle to the
+write-enabled network namespace. This targets accidental agent writes and
+adds defense in depth against command code; it is not a sandbox for hostile
+code running inside a trusted pi extension.
+
+## Authentication
+
+`pi-square` reads the host GitHub credential at startup with
+`gh auth token --hostname github.com`, so `gh` must already be authenticated
+for GitHub.com (`gh auth login`). The credential is held only in the gateway's
+memory; it is never written to disk, logged, or passed into pi or any command.
+
+For every approved request the gateway strips any client-supplied
+authorization, cookies, and proxy credentials, inserts its own credential, and
+sends the request to the TLS-verified `api.github.com` upstream. Commands
+receive a dummy `GH_TOKEN` so `gh` and `curl` construct authenticated calls;
+the gateway replaces it.
+
+The previous read-only/write token file at `~/.pi-square/github-tokens.json`
+is no longer used. `pi-square` does not read or delete it; you can remove it
+manually.
 
 ## Build
 
@@ -72,26 +120,23 @@ pi-square -- --model example "Explain this project"
 All pi arguments (including prompts) must follow `--`. Running `pi-square`
 without arguments starts pi normally. `--mode=dev` keeps the sandbox and
 GitHub-mode enforcement active but omits mode information from the model's
-system prompt, which is useful for testing sandbox behavior. Versions use
-`0.0.0-preview.v<shortCommitHash>` for both Nix and local `go build` builds.
-If Git revision metadata is unavailable, the hash is `unknown`. Override the
-version with `go build -ldflags "-X main.version=VERSION" -o pi-square .`.
-
-On the first run, `pi-square` asks (without echoing input) for a read-only
-GitHub token and a write-capable GitHub token. It stores them in
-`~/.pi-square/github-tokens.json` with owner-only permissions. Later runs load
-the saved tokens without prompting. The credentials file is not mounted into
-the sandbox; only the bundled extension and the `pi-square` binary itself are
-materialized there.
+system prompt. Versions use `0.0.0-preview.v<shortCommitHash>` for both Nix and
+local `go build` builds. Override the version with
+`go build -ldflags "-X main.version=VERSION" -o pi-square .`.
 
 For safety, the filesystem root and `$HOME` themselves cannot be used as the
 project directory.
 
 ## Limitations
 
+- Network isolation applies to commands, not to pi itself or to in-process
+  custom tools. Audit or disable any custom tool that performs its own network
+  I/O; do not assume all pi traffic is isolated.
+- Only `api.github.com` REST and GraphQL are supported. `git clone/fetch/push`,
+  SSH, Git LFS, registries, asset uploads and downloads, raw-content hosts, and
+  GitHub Enterprise are out of scope.
 - pi's own credentials under `~/.pi` are readable by the agent, because pi
   needs them. Anything else the agent must not see has to stay out of `~/.pi`,
   the project directory, and the read-only configuration files listed above.
-- In `publish` mode the write token and the SSH agent are available to every
-  command the agent runs.
-- Network access is not restricted in any mode.
+- If the gateway fails, API access fails closed. There is no direct-network
+  fallback.

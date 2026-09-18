@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext, ToolResultEvent } from "@earendil-works/pi-coding-agent";
@@ -8,136 +7,57 @@ type GhMode = "browse" | "local" | "publish";
 
 const STATE_ENTRY = "gh-mode-state";
 const STATUS_KEY = "gh-mode";
-const GITHUB_ICON = ""; // Nerd Font / Font Awesome GitHub mark
-// Configure exactly these environment variables for GitHub tokens.
-const RO_TOKEN_ENV = "PI_GH_RO_TOKEN";
-const W_TOKEN_ENV = "PI_GH_W_TOKEN";
+const GITHUB_ICON = "";
+const DENY_WRITE = "write_requires_publish";
 
-function restoreMode(ctx: ExtensionContext, fallback: GhMode): GhMode {
-	let mode = fallback;
+// Restore browse or local from the session, but never silently re-enter
+// publish: a resumed session starts read-only and the user re-enables writes
+// deliberately.
+function restoreMode(ctx: ExtensionContext): GhMode {
+	let mode: GhMode = "browse";
 	for (const entry of ctx.sessionManager.getEntries()) {
 		if (entry.type === "custom" && entry.customType === STATE_ENTRY) {
 			const restored = (entry.data as { mode?: GhMode } | undefined)?.mode;
-			if (restored === "browse" || restored === "local" || restored === "publish") mode = restored;
+			if (restored === "browse" || restored === "local") mode = restored;
+			else if (restored === "publish") mode = "browse";
 		}
 	}
 	return mode;
 }
 
-function tokenEnvName(mode: GhMode): string {
-	return mode === "publish" ? W_TOKEN_ENV : RO_TOKEN_ENV;
-}
-
 function modePrompt(mode: GhMode): string {
 	const permission = mode === "browse"
-		? "You may inspect GitHub and repository state, but the entire workdir and remote GitHub state are read-only."
+		? "The entire workdir and remote GitHub state are read-only."
 		: mode === "local"
-			? "Local Git changes are allowed, but remote GitHub state is read-only."
+			? "Local Git changes are allowed; remote GitHub state is read-only."
 			: "Local Git changes and remote GitHub writes are allowed.";
-	return `GitHub safety mode: ${mode}. ${permission} Do not create, edit, close, or otherwise modify GitHub issues, pull requests, releases, or other remote state unless the mode is publish. The user can switch modes with /gh-mode.`;
-}
-
-function explicitGhTokenEnv(command: string): string | undefined {
-	for (const token of tokenize(command)) {
-		if (!token.startsWith("GH_TOKEN=")) continue;
-		const value = token.slice("GH_TOKEN=".length);
-		if (value === `$${RO_TOKEN_ENV}` || value === `\${${RO_TOKEN_ENV}}`) return RO_TOKEN_ENV;
-		if (value === `$${W_TOKEN_ENV}` || value === `\${${W_TOKEN_ENV}}`) return W_TOKEN_ENV;
-	}
-	return undefined;
-}
-
-function prefixGhToken(command: string, mode: GhMode): string {
-	const explicitTokenEnv = explicitGhTokenEnv(command);
-	if (explicitTokenEnv) return `unset GH_TOKEN; ${command}`;
-	const tokenEnv = tokenEnvName(mode);
-	return `export GH_TOKEN="\${${tokenEnv}}"; ${command}`;
-}
-
-function prefixGitToken(command: string, mode: GhMode): string {
-	const tokenEnv = tokenEnvName(mode);
-	// GH_TOKEN is not used by git itself. Provide the selected token through
-	// GIT_ASKPASS for HTTPS GitHub remotes, and reset credential.helper so a
-	// stored write credential cannot bypass browse/local modes.
-	const hideWriteToken = mode === "publish" ? "" : `unset ${W_TOKEN_ENV}; `;
-	return `${hideWriteToken}tmp="$(mktemp)"; cat >"$tmp" <<'PI_GH_MODE_ASKPASS'
-#!/bin/sh
-case "$1" in
-	*Username*) printf '%s\\n' 'x-access-token' ;;
-	*Password*) printf '%s\\n' "$GH_TOKEN" ;;
-	*) printf '\\n' ;;
-esac
-PI_GH_MODE_ASKPASS
-chmod 700 "$tmp"; trap 'rm -f "$tmp"' EXIT; export GH_TOKEN="\${${tokenEnv}}" GIT_ASKPASS="$tmp" GIT_TERMINAL_PROMPT=0 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0=; ${command}`;
-}
-
-function tokenize(command: string): string[] {
-	const tokens: string[] = [];
-	let current = "";
-	let quote: "'" | '"' | undefined;
-	let escaped = false;
-	for (const ch of command) {
-		if (escaped) {
-			current += ch;
-			escaped = false;
-			continue;
-		}
-		if (ch === "\\" && quote !== "'") {
-			escaped = true;
-			continue;
-		}
-		if (quote) {
-			if (ch === quote) quote = undefined;
-			else current += ch;
-			continue;
-		}
-		if (ch === "'" || ch === '"') {
-			quote = ch;
-			continue;
-		}
-		if (/\s/.test(ch) || "|&;()<>".includes(ch)) {
-			if (current) tokens.push(current);
-			current = "";
-			continue;
-		}
-		current += ch;
-	}
-	if (current) tokens.push(current);
-	return tokens;
-}
-
-function hasGhInvocation(command: string): boolean {
-	return tokenize(command).some((token) => token === "gh" || token.endsWith("/gh"));
-}
-
-function hasGitInvocation(command: string): boolean {
-	return tokenize(command).some((token) => token === "git" || token.endsWith("/git"));
+	return [
+		`GitHub safety mode: ${mode}. ${permission}`,
+		"Shell networking is limited to api.github.com through a mandatory proxy.",
+		"Browse and local permit REST GET/HEAD and GraphQL queries.",
+		"New commands launched in publish may perform REST writes and GraphQL mutations.",
+		"Git transport, SSH, other GitHub hosts, and all other internet access are unsupported.",
+		"Direct networking and proxy bypass do not work.",
+		"Mode changes affect newly launched commands only; commands already running keep the permissions they launched with.",
+		"If a task needs a write, attempt the command once; the mode guard offers to switch to publish. If the user keeps the current mode, do not repeat the blocked operation. The user can also switch with /gh-mode.",
+	].join(" ");
 }
 
 function shellQuote(value: string): string {
 	return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
-function gitConfigValue(key: string): string | undefined {
-	const result = spawnSync("git", ["config", "--get", key], { encoding: "utf8" });
-	if (result.status !== 0) return undefined;
-	const value = result.stdout.trim();
-	return value || undefined;
-}
-
-function gitIdentityEnv(): Record<string, string> {
-	const name = process.env.GIT_AUTHOR_NAME || process.env.GIT_COMMITTER_NAME || gitConfigValue("user.name");
-	const email = process.env.GIT_AUTHOR_EMAIL || process.env.GIT_COMMITTER_EMAIL || gitConfigValue("user.email");
-	const env: Record<string, string> = {};
-	if (name) {
-		env.GIT_AUTHOR_NAME = name;
-		env.GIT_COMMITTER_NAME = process.env.GIT_COMMITTER_NAME || name;
+// routeCommand rewrites a shell command so pi's bash tool execs the trusted
+// launcher stub instead of the command itself. The command is base64-encoded so
+// no quoting can leak out, and the mode selects the launch class. The stub, not
+// this shell, reaches the supervisor.
+function routeCommand(command: string, mode: GhMode): string {
+	const helper = process.env.PI_SQUARE_GH_HELPER;
+	if (!helper) {
+		return "printf '%s\\n' 'pi-square launcher is not configured.' >&2; exit 127";
 	}
-	if (email) {
-		env.GIT_AUTHOR_EMAIL = email;
-		env.GIT_COMMITTER_EMAIL = process.env.GIT_COMMITTER_EMAIL || email;
-	}
-	return env;
+	const encoded = Buffer.from(command, "utf8").toString("base64");
+	return `exec ${shellQuote(helper)} --pi-square-stub ${mode} ${encoded}`;
 }
 
 function isInside(child: string, parent: string): boolean {
@@ -152,26 +72,6 @@ function resolvedTargetPath(inputPath: string): string {
 	return path.join(parent, path.basename(absolute));
 }
 
-function modeSandbox(command: string, mode: GhMode): string {
-	if (mode === "publish") return command;
-
-	const setup = ["export GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0"];
-	if (mode === "local") {
-		setup.push("export GIT_ASKPASS=false GIT_SSH_COMMAND='sh -c \"exit 1\"' GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0=");
-		for (const [key, value] of Object.entries(gitIdentityEnv())) {
-			setup.push(`export ${key}=${shellQuote(value)}`);
-		}
-	}
-	setup.push(command);
-	const wrapped = setup.join("; ");
-
-	const helper = process.env.PI_SQUARE_GH_HELPER;
-	if (!helper) {
-		return "printf '%s\\n' 'GitHub mode sandbox helper is not configured.' >&2; exit 127";
-	}
-	return [helper, "--pi-square-internal-gh-sandbox", mode, process.cwd(), wrapped].map(shellQuote).join(" ");
-}
-
 export default function ghModeExtension(pi: ExtensionAPI): void {
 	// The source lives in this repository, but the extension is enabled only by
 	// the pi-square wrapper, which embeds it and sets this marker.
@@ -179,10 +79,15 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 
 	let mode: GhMode = "browse";
 	const workdir = fs.realpathSync.native(process.cwd());
-	const githubCalls = new Set<string>();
+	const launchedMode = new Map<string, GhMode>();
 
 	function persistMode(): void {
 		pi.appendEntry(STATE_ENTRY, { mode });
+	}
+
+	function updateStatus(ctx: ExtensionContext): void {
+		const color = mode === "browse" ? "success" : mode === "local" ? "accent" : "warning";
+		ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg(color, mode));
 	}
 
 	function setMode(next: GhMode, ctx: ExtensionContext, notify = true): void {
@@ -192,49 +97,37 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 		if (notify) ctx.ui.notify(`${GITHUB_ICON} GitHub mode: ${mode}`, "info");
 	}
 
-	function updateStatus(ctx: ExtensionContext): void {
-		const color = mode === "browse" ? "success" : mode === "local" ? "accent" : "warning";
-		ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg(color, mode));
+	function modeIncludes(current: GhMode, required: GhMode): boolean {
+		const rank: Record<GhMode, number> = { browse: 0, local: 1, publish: 2 };
+		return rank[current] >= rank[required];
 	}
 
-	async function patchGhToken(event: { input: { command?: string }; toolName: string; toolCallId: string }) {
+	async function suggestMode(required: GhMode, ctx: ExtensionContext, reason: string): Promise<boolean> {
+		if (modeIncludes(mode, required)) return true;
+		if (!ctx.hasUI) return false;
+
+		const previous = mode;
+		const switchOption = `Switch mode to ${required}`;
+		const choice = await ctx.ui.select(`${GITHUB_ICON} GitHub mode is ${previous}. ${reason}`, [
+			switchOption,
+			"Keep existing",
+		]);
+		if (choice !== switchOption) return false;
+
+		// Another prompt or shortcut may have changed the mode while this dialog
+		// was open. Never overwrite that newer choice unless it is insufficient.
+		if (mode !== previous) return modeIncludes(mode, required);
+		setMode(required, ctx);
+		return true;
+	}
+
+	async function routeBash(event: { input: { command?: string }; toolName: string; toolCallId: string }) {
 		if (event.toolName !== "bash" || typeof event.input.command !== "string") return;
-		const command = event.input.command;
-		const usesGh = hasGhInvocation(command);
-		const usesGit = hasGitInvocation(command);
-		const usesGithub = usesGh || usesGit;
-		if (usesGithub) githubCalls.add(event.toolCallId);
-
-		// In browse/local modes, hide the write token from every shell so raw HTTP
-		// clients (curl, wget, etc.) cannot bypass gh-mode enforcement with
-		// $PI_GH_W_TOKEN. gh always uses the read-only token outside publish mode.
-		if (mode !== "publish") {
-			if (usesGithub) {
-				const tokenEnv = usesGh ? explicitGhTokenEnv(command) || tokenEnvName(mode) : tokenEnvName(mode);
-				if (tokenEnv === W_TOKEN_ENV) {
-					return { block: true, reason: `GitHub mode is ${mode}: ${W_TOKEN_ENV} is only available in publish mode.` };
-				}
-				if (usesGh && !process.env[tokenEnv]) {
-					return { block: true, reason: `GitHub ${mode} token is not configured. Set ${tokenEnv}.` };
-				}
-				event.input.command = modeSandbox(usesGit ? prefixGitToken(command, mode) : `unset ${W_TOKEN_ENV}; ${prefixGhToken(command, mode)}`, mode);
-				return;
-			}
-			event.input.command = modeSandbox(`unset GH_TOKEN ${W_TOKEN_ENV}; ${command}`, mode);
-			return;
-		}
-
-		if (!usesGithub) return;
-
-		const tokenEnv = usesGh ? explicitGhTokenEnv(command) || tokenEnvName(mode) : tokenEnvName(mode);
-		if (!process.env[tokenEnv]) {
-			return { block: true, reason: `GitHub ${mode} token is not configured. Set ${tokenEnv}.` };
-		}
-
-		event.input.command = usesGit ? prefixGitToken(command, mode) : prefixGhToken(command, mode);
+		launchedMode.set(event.toolCallId, mode);
+		event.input.command = routeCommand(event.input.command, mode);
 	}
 
-	async function guardWorkdirEdits(event: { input: { path?: string }; toolName: string }) {
+	async function guardWorkdirEdits(event: { input: { path?: string }; toolName: string }, ctx: ExtensionContext) {
 		if (mode !== "browse" || !["edit", "write"].includes(event.toolName) || typeof event.input.path !== "string") return;
 		const lexicalTarget = path.resolve(process.cwd(), event.input.path);
 		let resolvedTarget: string;
@@ -244,18 +137,23 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 			return { block: true, reason: `GitHub mode is browse: cannot resolve ${event.input.path} for workdir protection.` };
 		}
 		if (isInside(lexicalTarget, workdir) || isInside(resolvedTarget, workdir)) {
-			return { block: true, reason: "GitHub mode is browse: the workdir is read-only. Switch to /gh-mode local to edit files." };
+			if (await suggestMode("local", ctx, "Editing the workdir requires local mode.")) return;
+			return { block: true, reason: "GitHub mode is browse: the workdir is read-only. The user chose to keep the existing mode." };
 		}
 	}
 
-	function explainFailedGithubCommand(event: ToolResultEvent) {
-		const wasGithubCommand = githubCalls.delete(event.toolCallId);
-		if (mode === "publish" || !event.isError || event.toolName !== "bash" || !wasGithubCommand) return;
+	async function offerEscalationOnDenial(event: ToolResultEvent, ctx: ExtensionContext) {
+		launchedMode.delete(event.toolCallId);
+		if (event.toolName !== "bash") return;
+		const text = event.content.map((part) => (part.type === "text" ? part.text : "")).join("\n");
+		if (!text.includes(DENY_WRITE)) return;
+		if (modeIncludes(mode, "publish")) return;
 
-		const hint = mode === "browse"
-			? "Switch to /gh-mode local for local repository changes, or /gh-mode publish for remote writes."
-			: "Switch to /gh-mode publish if the command needs remote write access.";
-		return { content: [...event.content, { type: "text" as const, text: `${GITHUB_ICON} GitHub mode is ${mode}. ${hint}` }] };
+		const changed = await suggestMode("publish", ctx, "A command was denied because it writes to GitHub.");
+		const hint = changed
+			? `${GITHUB_ICON} GitHub mode switched to publish. Launch the command again to perform the write.`
+			: `${GITHUB_ICON} GitHub mode remains ${mode}. Writes require publish mode (/gh-mode publish).`;
+		return { content: [...event.content, { type: "text" as const, text: hint }] };
 	}
 
 	function nextMode(): GhMode {
@@ -270,7 +168,7 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 			const arg = args.trim().toLowerCase();
 			if (!arg || arg === "status") {
 				updateStatus(ctx);
-				ctx.ui.notify(`${GITHUB_ICON} GitHub mode: ${mode}\n${RO_TOKEN_ENV}: ${process.env[RO_TOKEN_ENV] ? "set" : "missing"}\n${W_TOKEN_ENV}: ${process.env[W_TOKEN_ENV] ? "set" : "missing"}`, "info");
+				ctx.ui.notify(`${GITHUB_ICON} GitHub mode: ${mode}\nShell networking is limited to api.github.com through the gateway.`, "info");
 				return;
 			}
 			if (arg === "browse" || arg === "local" || arg === "publish") return setMode(arg, ctx);
@@ -285,7 +183,7 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
-		mode = restoreMode(ctx, "browse");
+		mode = restoreMode(ctx);
 		updateStatus(ctx);
 	});
 
@@ -296,6 +194,6 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 	}
 
 	pi.on("tool_call", guardWorkdirEdits);
-	pi.on("tool_call", patchGhToken);
-	pi.on("tool_result", explainFailedGithubCommand);
+	pi.on("tool_call", routeBash);
+	pi.on("tool_result", offerEscalationOnDenial);
 }
