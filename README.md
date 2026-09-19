@@ -25,19 +25,24 @@ GitHub operations start in read-only `browse` mode. Use `/gh-mode local` for
 local Git changes and `/gh-mode publish` for remote writes, or press
 Alt+Super+G to cycle modes.
 
-| Mode      | Workdir   | Shell network                                    |
-|-----------|-----------|--------------------------------------------------|
-| `browse`  | read-only | `api.github.com` REST GET/HEAD and GraphQL queries |
-| `local`   | writable  | `api.github.com` REST GET/HEAD and GraphQL queries |
-| `publish` | writable  | adds REST writes and GraphQL mutations           |
+| Mode      | Workdir   | Shell network                                                       |
+|-----------|-----------|---------------------------------------------------------------------|
+| `browse`  | read-only | HTTPS; gateway-authenticated GitHub REST GET/HEAD and GraphQL queries |
+| `local`   | writable  | HTTPS; gateway-authenticated GitHub REST GET/HEAD and GraphQL queries |
+| `publish` | writable  | HTTPS; adds gateway-authenticated REST writes and GraphQL mutations   |
 
 GitHub authentication is not the read boundary. The gateway enforces which
-operations are permitted before forwarding them upstream, so a read-only mode
-stays read-only regardless of the credential's scopes.
+operations may use its credential before forwarding them upstream, so a
+read-only mode cannot use that credential for writes regardless of its scopes.
+This guarantee does not cover credentials independently available to a command.
 
-Only `api.github.com:443` is reachable, and only through the gateway. Git
-transport, SSH, Git LFS, registries, release asset hosts, raw-content hosts,
-and every other network destination are unsupported from commands. Direct
+HTTPS on port 443 is reachable only through the gateway. For
+`api.github.com:443`, the gateway intercepts TLS and applies the REST/GraphQL
+policy above. Connections to other public destinations—including other GitHub
+hosts and external relays—are end-to-end TLS tunnels: the gateway logs
+connection metadata but neither inspects traffic nor injects its credential.
+Private, loopback, link-local, and other non-public destinations are rejected.
+Plain HTTP, SSH, and other destination ports are unsupported. Direct
 connections, alternative proxies, and proxy bypass do not work; a command that
 ignores the proxy simply fails.
 
@@ -132,9 +137,11 @@ project directory.
 - Network isolation applies to commands, not to pi itself or to in-process
   custom tools. Audit or disable any custom tool that performs its own network
   I/O; do not assume all pi traffic is isolated.
-- Only `api.github.com` REST and GraphQL are supported. `git clone/fetch/push`,
-  SSH, Git LFS, registries, asset uploads and downloads, raw-content hosts, and
-  GitHub Enterprise are out of scope.
+- Only `api.github.com` REST and GraphQL receive the gateway credential and
+  policy enforcement. Other public HTTPS destinations are raw tunnels. Git
+  operations that need SSH or non-HTTPS ports remain unsupported; HTTPS Git,
+  LFS, registries, assets, raw-content hosts, and GitHub Enterprise may be
+  reachable but receive no gateway-injected authentication.
 - pi's own credentials under `~/.pi` are readable by the agent, because pi
   needs them. Anything else the agent must not see has to stay out of `~/.pi`,
   the project directory, and the read-only configuration files listed above.

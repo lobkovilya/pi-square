@@ -5,15 +5,20 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -49,6 +54,12 @@ type gateway struct {
 	client       *http.Client
 	upstreamBase *url.URL
 	logger       *log.Logger
+
+	// These hooks make destination validation and dialing independently
+	// testable. Production instances use the system resolver and a direct dialer.
+	lookupIP     func(context.Context, string) ([]netip.Addr, error)
+	dialContext  func(context.Context, string, string) (net.Conn, error)
+	connectionID atomic.Uint64
 }
 
 func newGateway(ca *caMaterial, token string, logger *log.Logger) (*gateway, error) {
@@ -72,6 +83,7 @@ func newGateway(ca *caMaterial, token string, logger *log.Logger) (*gateway, err
 			ServerName: permittedHost,
 		},
 	}
+	dialer := &net.Dialer{Timeout: gatewayDial}
 	return &gateway{
 		ca:    ca,
 		leaf:  leaf,
@@ -84,6 +96,10 @@ func newGateway(ca *caMaterial, token string, logger *log.Logger) (*gateway, err
 		},
 		upstreamBase: base,
 		logger:       logger,
+		lookupIP: func(ctx context.Context, host string) ([]netip.Addr, error) {
+			return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+		},
+		dialContext: dialer.DialContext,
 	}, nil
 }
 
@@ -92,7 +108,7 @@ func (g *gateway) tlsConfig() *tls.Config {
 		MinVersion: tls.VersionTLS12,
 		NextProtos: []string{"http/1.1"},
 		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-			if hello.ServerName != "" && !strings.EqualFold(hello.ServerName, permittedHost) {
+			if hello.ServerName != "" && normalizeHostname(hello.ServerName) != permittedHost {
 				return nil, fmt.Errorf("unexpected SNI %q", hello.ServerName)
 			}
 			return &g.leaf, nil
@@ -100,13 +116,15 @@ func (g *gateway) tlsConfig() *tls.Config {
 	}
 }
 
-// serveIngress handles one client connection arriving on a class ingress: the
-// HTTP CONNECT preamble, TLS interception, then the plaintext HTTP requests.
+// serveIngress handles one client connection arriving on a class ingress. It
+// intercepts only the fixed GitHub API endpoint; all other public HTTPS
+// destinations are byte-for-byte tunnels.
 func (g *gateway) serveIngress(conn net.Conn, class policyClass) {
 	defer conn.Close()
 
 	conn.SetReadDeadline(time.Now().Add(gatewayIdle))
-	br := bufio.NewReader(io.LimitReader(conn, connectMaxHeader))
+	limited := &io.LimitedReader{R: conn, N: connectMaxHeader}
+	br := bufio.NewReader(limited)
 	req, err := http.ReadRequest(br)
 	if err != nil {
 		return
@@ -115,26 +133,229 @@ func (g *gateway) serveIngress(conn net.Conn, class policyClass) {
 		g.writeConnectError(conn, http.StatusMethodNotAllowed, "only CONNECT is supported")
 		return
 	}
-	if !hostMatches(req.Host) {
+
+	host, port, err := normalizeConnectAuthority(req.Host)
+	if err != nil {
+		g.writeConnectError(conn, http.StatusBadRequest, "invalid CONNECT authority")
+		return
+	}
+	if host == permittedHost && port != permittedPort {
 		g.log(class, req.Method, req.Host, "-", denyUnsupportedHost, http.StatusForbidden)
 		g.writeConnectError(conn, http.StatusForbidden, "unsupported CONNECT authority")
 		return
 	}
-	if br.Buffered() > 0 {
-		// Bytes after the CONNECT headers would desync TLS; refuse.
-		g.writeConnectError(conn, http.StatusBadRequest, "unexpected data after CONNECT")
-		return
-	}
-	if _, err := io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+	if port != permittedPort {
+		g.writeConnectError(conn, http.StatusForbidden, "unsupported CONNECT port")
 		return
 	}
 
+	// ReadRequest may have consumed bytes sent optimistically after CONNECT.
+	// Drain both its buffer and the remainder of the limited reader before
+	// continuing with the underlying connection.
+	buffered := io.MultiReader(br, conn)
 	conn.SetReadDeadline(time.Time{})
-	tlsConn := tls.Server(conn, g.tlsConfig())
+	if host != permittedHost {
+		g.servePassthrough(conn, buffered, class, host, port)
+		return
+	}
+
+	if _, err := io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+		return
+	}
+	tlsConn := tls.Server(&readerConn{Conn: conn, reader: buffered}, g.tlsConfig())
 	if err := tlsConn.Handshake(); err != nil {
 		return
 	}
 	g.serveTunnel(tlsConn, class)
+}
+
+// readerConn preserves bytes a buffered CONNECT parser read ahead.
+type readerConn struct {
+	net.Conn
+	reader io.Reader
+}
+
+func (c *readerConn) Read(p []byte) (int, error) { return c.reader.Read(p) }
+
+func normalizeConnectAuthority(authority string) (string, string, error) {
+	host, port, err := net.SplitHostPort(authority)
+	if err != nil || host == "" || port == "" {
+		return "", "", fmt.Errorf("authority must contain host and port")
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return "", "", fmt.Errorf("invalid port")
+	}
+	host = normalizeHostname(host)
+	if host == "" || strings.ContainsAny(host, " /\\@") {
+		return "", "", fmt.Errorf("invalid host")
+	}
+	return host, strconv.Itoa(n), nil
+}
+
+func normalizeHostname(host string) string {
+	host = strings.ToLower(host)
+	if strings.HasSuffix(host, ".") {
+		host = strings.TrimSuffix(host, ".")
+	}
+	return host
+}
+
+var errNonPublicDestination = errors.New("destination is not public")
+
+var nonPublicPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("192.88.99.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("100::/64"),
+	netip.MustParsePrefix("2001::/23"),
+	netip.MustParsePrefix("2001:db8::/32"),
+	netip.MustParsePrefix("2002::/16"),
+	netip.MustParsePrefix("3fff::/20"),
+	netip.MustParsePrefix("5f00::/16"),
+}
+
+func isPublicDestination(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	if !ip.IsValid() || !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+		return false
+	}
+	for _, prefix := range nonPublicPrefixes {
+		if prefix.Contains(ip) {
+			return false
+		}
+	}
+	return true
+}
+
+func (g *gateway) resolvePublic(ctx context.Context, host string) (netip.Addr, error) {
+	if ip, err := netip.ParseAddr(host); err == nil {
+		ip = ip.Unmap()
+		if !isPublicDestination(ip) {
+			return netip.Addr{}, errNonPublicDestination
+		}
+		return ip, nil
+	}
+	lookup := g.lookupIP
+	if lookup == nil {
+		lookup = func(ctx context.Context, name string) ([]netip.Addr, error) {
+			return net.DefaultResolver.LookupNetIP(ctx, "ip", name)
+		}
+	}
+	ips, err := lookup(ctx, host)
+	if err != nil {
+		return netip.Addr{}, err
+	}
+	if len(ips) == 0 {
+		return netip.Addr{}, fmt.Errorf("destination has no addresses")
+	}
+	// Reject the whole answer if any address is non-public. Selecting only a
+	// public member of a mixed answer would make policy depend on DNS ordering.
+	for _, ip := range ips {
+		if !isPublicDestination(ip) {
+			return netip.Addr{}, errNonPublicDestination
+		}
+	}
+	return ips[0].Unmap(), nil
+}
+
+func (g *gateway) servePassthrough(client net.Conn, clientReader io.Reader, class policyClass, host, port string) {
+	id := g.connectionID.Add(1)
+	started := time.Now()
+	connectedIP := "-"
+	outcome := "resolve_error"
+	var clientToUpstream, upstreamToClient int64
+	defer func() {
+		if g.logger != nil {
+			g.logger.Printf("gateway tunnel_id=%d class=%s destination=%s:%s connected_ip=%s outcome=%s duration_ms=%d bytes_client_to_upstream=%d bytes_upstream_to_client=%d",
+				id, class, host, port, connectedIP, outcome, time.Since(started).Milliseconds(), clientToUpstream, upstreamToClient)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), gatewayDial)
+	defer cancel()
+	ip, err := g.resolvePublic(ctx, host)
+	if err != nil {
+		if errors.Is(err, errNonPublicDestination) {
+			outcome = "blocked_destination"
+			g.writeConnectError(client, http.StatusForbidden, "destination is not public")
+		} else {
+			g.writeConnectError(client, http.StatusBadGateway, "destination resolution failed")
+		}
+		return
+	}
+	connectedIP = ip.String()
+	dial := g.dialContext
+	if dial == nil {
+		dial = (&net.Dialer{Timeout: gatewayDial}).DialContext
+	}
+	upstream, err := dial(ctx, "tcp", net.JoinHostPort(ip.String(), port))
+	if err != nil {
+		outcome = "dial_error"
+		g.writeConnectError(client, http.StatusBadGateway, "upstream connection failed")
+		return
+	}
+	defer upstream.Close()
+
+	// Do not acknowledge CONNECT until DNS policy and the upstream connection
+	// have both succeeded.
+	if _, err := io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+		outcome = "ack_error"
+		return
+	}
+	outcome = "complete"
+
+	type copyResult struct {
+		direction string
+		n         int64
+		err       error
+	}
+	results := make(chan copyResult, 2)
+	go func() {
+		n, err := io.Copy(upstream, clientReader)
+		closeTunnelWrite(upstream)
+		results <- copyResult{"upstream", n, err}
+	}()
+	go func() {
+		n, err := io.Copy(client, upstream)
+		closeTunnelWrite(client)
+		results <- copyResult{"client", n, err}
+	}()
+
+	first := <-results
+	// A half-close permits the peer's final TLS records to flow, while the
+	// deadline guarantees a peer cannot strand the relay forever.
+	client.SetDeadline(time.Now().Add(gatewayIdle))
+	upstream.SetDeadline(time.Now().Add(gatewayIdle))
+	second := <-results
+	for _, result := range []copyResult{first, second} {
+		if result.direction == "upstream" {
+			clientToUpstream = result.n
+		} else {
+			upstreamToClient = result.n
+		}
+		if result.err != nil && !isClosedConnectionError(result.err) {
+			outcome = "relay_error"
+		}
+	}
+}
+
+func closeTunnelWrite(conn net.Conn) {
+	if conn, ok := conn.(interface{ CloseWrite() error }); ok {
+		_ = conn.CloseWrite()
+	}
+}
+
+func isClosedConnectionError(err error) bool {
+	return err == nil || strings.Contains(err.Error(), "use of closed network connection")
 }
 
 func (g *gateway) serveTunnel(tlsConn *tls.Conn, class policyClass) {

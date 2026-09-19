@@ -27,19 +27,20 @@ function restoreMode(ctx: ExtensionContext): GhMode {
 
 function modePrompt(mode: GhMode): string {
 	const permission = mode === "browse"
-		? "The entire workdir and remote GitHub state are read-only."
+		? "The entire workdir is read-only, and the gateway GitHub credential cannot perform remote writes."
 		: mode === "local"
-			? "Local Git changes are allowed; remote GitHub state is read-only."
-			: "Local Git changes and remote GitHub writes are allowed.";
+			? "Local Git changes are allowed; the gateway GitHub credential cannot perform remote writes."
+			: "Local Git changes and remote GitHub writes using the gateway credential are allowed.";
 	return [
 		`GitHub safety mode: ${mode}. ${permission}`,
-		"Shell networking is limited to api.github.com through a mandatory proxy.",
-		"Browse and local permit REST GET/HEAD and GraphQL queries.",
-		"New commands launched in publish may perform REST writes and GraphQL mutations.",
-		"Git transport, SSH, other GitHub hosts, and all other internet access are unsupported.",
-		"Direct networking and proxy bypass do not work.",
+		"Shell commands can reach public HTTPS destinations on port 443 only through a mandatory proxy.",
+		"For api.github.com, browse and local permit REST GET/HEAD and GraphQL queries using the gateway credential.",
+		"New commands launched in publish may use the gateway credential for REST writes and GraphQL mutations.",
+		"Other public HTTPS destinations, including other GitHub hosts, are raw end-to-end TLS tunnels and receive no gateway credential or policy enforcement.",
+		"Independently available credentials are outside the GitHub safety-mode guarantee.",
+		"Plain HTTP, non-HTTPS ports, SSH, direct networking, and proxy bypass do not work.",
 		"Mode changes affect newly launched commands only; commands already running keep the permissions they launched with.",
-		"If a task needs a write, attempt the command once; the mode guard offers to switch to publish. If the user keeps the current mode, do not repeat the blocked operation. The user can also switch with /gh-mode.",
+		"If a task needs a write through api.github.com, attempt the command once; the mode guard offers to switch to publish. If the user keeps the current mode, do not repeat the blocked operation. The user can also switch with /gh-mode.",
 	].join(" ");
 }
 
@@ -168,7 +169,7 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 			const arg = args.trim().toLowerCase();
 			if (!arg || arg === "status") {
 				updateStatus(ctx);
-				ctx.ui.notify(`${GITHUB_ICON} GitHub mode: ${mode}\nShell networking is limited to api.github.com through the gateway.`, "info");
+				ctx.ui.notify(`${GITHUB_ICON} GitHub mode: ${mode}\nShell commands can reach public HTTPS destinations on port 443 through the gateway; only api.github.com receives the gateway credential.`, "info");
 				return;
 			}
 			if (arg === "browse" || arg === "local" || arg === "publish") return setMode(arg, ctx);

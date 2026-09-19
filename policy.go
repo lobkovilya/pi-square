@@ -4,6 +4,7 @@ package main
 
 import (
 	"mime"
+	"net"
 	"net/http"
 	"path"
 	"strings"
@@ -164,23 +165,14 @@ func isJSONContentType(value string) bool {
 
 func hostMatches(authority string) bool {
 	host := authority
-	if h, p, ok := splitHostPort(authority); ok {
+	if h, p, err := net.SplitHostPort(authority); err == nil {
 		if p != permittedPort {
 			return false
 		}
 		host = h
+	} else if strings.Contains(authority, ":") {
+		return false
 	}
-	return strings.EqualFold(host, permittedHost)
-}
-
-func splitHostPort(authority string) (host, port string, ok bool) {
-	i := strings.LastIndex(authority, ":")
-	if i < 0 {
-		return authority, "", false
-	}
-	// Reject bracketless IPv6 or other colon-heavy authorities.
-	if strings.Contains(authority[:i], ":") {
-		return "", "", false
-	}
-	return authority[:i], authority[i+1:], true
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	return host == permittedHost
 }

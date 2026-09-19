@@ -56,7 +56,7 @@ func TestIntegration(t *testing.T) {
 		{"browse graphql query", "browse", `gh api graphql -f query='query{viewer{login}}' -q .data.viewer.login`, "gateway class=ro method=POST path=/graphql result=allow", ""},
 		{"browse graphql mutation denied", "browse", `gh api graphql -f query='mutation{__typename}' 2>&1; true`, "write_requires_publish", ""},
 		{"publish graphql mutation allowed", "publish", `gh api graphql -f query='mutation{__typename}' -q .data.__typename`, "Mutation", "write_requires_publish"},
-		{"browse non-github blocked", "browse", `curl -s -m 10 https://example.com >/dev/null && echo REACHED || echo BLOCKED`, "BLOCKED", "REACHED"},
+		{"browse non-github passthrough", "browse", `curl -s -m 10 https://example.com >/dev/null && echo REACHED || echo BLOCKED`, "REACHED", "BLOCKED"},
 		{"browse proxy bypass blocked", "browse", `curl -s -m 10 --noproxy '*' https://140.82.112.3 >/dev/null && echo REACHED || echo BLOCKED`, "BLOCKED", "REACHED"},
 		{"browse workdir readonly", "browse", `touch ./__pi_square_itest 2>&1 && echo WROTE || echo READONLY`, "READONLY", "WROTE"},
 		{"local workdir writable", "local", `touch ./__pi_square_itest && echo WROTE && rm -f ./__pi_square_itest`, "WROTE", ""},
