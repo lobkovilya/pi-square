@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: e2e
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Install sandbox prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gh git curl util-linux coreutils
+          # Ubuntu 24.04 restricts unprivileged user namespaces via AppArmor.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          # The sandbox mounts /usr, but not setup-node's /opt tool cache.
+          sudo install -m 755 "$(command -v node)" /usr/local/bin/node
+          sudo env "PATH=$PATH" npm install --global --prefix /usr/local @mariozechner/pi-coding-agent@0.84.4
+
+      - run: npm ci
+
+      - name: Local sandbox tests
+        run: npm test
+
+      - name: Live GitHub tests
+        env:
+          PI_SQUARE_E2E_REPOSITORY: ${{ secrets.PI_SQUARE_E2E_REPOSITORY }}
+          PI_SQUARE_E2E_GITHUB_TOKEN: ${{ secrets.PI_SQUARE_E2E_GITHUB_TOKEN }}
+        run: |
+          if [ -z "$PI_SQUARE_E2E_REPOSITORY" ] || [ -z "$PI_SQUARE_E2E_GITHUB_TOKEN" ]; then
+            if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+              echo '::notice::Skipping live tests: fixture secrets are unavailable (for example, on fork or Dependabot PRs).'
+              exit 0
+            fi
+            echo '::error::Live tests require PI_SQUARE_E2E_REPOSITORY and PI_SQUARE_E2E_GITHUB_TOKEN.'
+            exit 1
+          fi
+          npm run live
