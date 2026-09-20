@@ -38,7 +38,7 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           # The sandbox mounts /usr, but not setup-node's /opt tool cache.
           sudo install -m 755 "$(command -v node)" /usr/local/bin/node
-          sudo env "PATH=$PATH" npm install --global --prefix /usr/local @mariozechner/pi-coding-agent@0.84.4
+          sudo env "PATH=$PATH" npm install --global --prefix /usr/local @earendil-works/pi-coding-agent@0.84.4
 
       - run: npm ci
 
