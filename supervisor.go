@@ -363,6 +363,9 @@ func (s *supervisor) runPi(args []string) error {
 	if s.devMode {
 		env = setEnv(env, "PI_SQUARE_DEV_MODE", "1")
 	}
+	if initialMode := os.Getenv("PI_SQUARE_INITIAL_GH_MODE"); initialMode != "" {
+		env = setEnv(env, "PI_SQUARE_INITIAL_GH_MODE", initialMode)
+	}
 
 	cmd := exec.Command(helperPath, append([]string{piStageMarker, s.piPath}, args...)...)
 	cmd.Env = env

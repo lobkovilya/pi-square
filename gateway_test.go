@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -104,6 +105,36 @@ func TestDispatchPolicyMatrix(t *testing.T) {
 			denial := resp.Header.Get("X-Pi-Square-Denial")
 			if denial != tc.wantDenial {
 				t.Fatalf("denial = %q, want %q", denial, tc.wantDenial)
+			}
+		})
+	}
+}
+
+func TestDenialIncludesGitHubCompatibleMessage(t *testing.T) {
+	for _, target := range []string{"https://api.github.com/user/repos", "https://api.github.com/graphql"} {
+		t.Run(target, func(t *testing.T) {
+			gw, upstream := newTestGateway(t)
+			req := newRequest(t, "POST", target, `{"query":"mutation { __typename }"}`, http.Header{"Content-Type": {"application/json"}})
+			resp, _ := gw.dispatch(classRO, req)
+			defer resp.Body.Close()
+			var payload struct {
+				Message string `json:"message"`
+				Error   struct {
+					Code    string `json:"code"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			if resp.StatusCode != http.StatusForbidden || resp.Header.Get("X-Pi-Square-Denial") != denyWriteRequiresPublish {
+				t.Fatalf("unexpected denial: %d %v", resp.StatusCode, resp.Header)
+			}
+			if payload.Error.Code != denyWriteRequiresPublish || payload.Error.Message == "" || payload.Message != payload.Error.Code+": "+payload.Error.Message {
+				t.Fatalf("missing client-visible denial reason: %+v", payload)
+			}
+			if upstream.lastReq != nil {
+				t.Fatal("denied request reached upstream")
 			}
 		})
 	}

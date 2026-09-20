@@ -32,7 +32,7 @@ func buildVersion() string {
 	return prefix + "unknown"
 }
 
-func runCLI(args []string, out io.Writer, launch func([]string, bool) error) error {
+func runCLI(args []string, out io.Writer, launch func([]string, bool, string) error) error {
 	var piArgs []string
 	for i, arg := range args {
 		if arg == "--" {
@@ -48,6 +48,7 @@ func runCLI(args []string, out io.Writer, launch func([]string, bool) error) err
 	showHelp := flags.Bool("help", false, "Show help")
 	flags.BoolVar(showHelp, "h", false, "Show help")
 	mode := flags.String("mode", "", "Wrapper mode (dev disables GitHub mode prompt guidance)")
+	ghMode := flags.String("gh-mode", "", "Initial GitHub mode (browse, local, or publish)")
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("%v; pass pi arguments after --", err)
 	}
@@ -57,13 +58,16 @@ func runCLI(args []string, out io.Writer, launch func([]string, bool) error) err
 	if *mode != "" && *mode != "dev" {
 		return fmt.Errorf("unsupported mode %q; expected dev", *mode)
 	}
+	if *ghMode != "" && *ghMode != "browse" && *ghMode != "local" && *ghMode != "publish" {
+		return fmt.Errorf("unsupported GitHub mode %q; expected browse, local, or publish", *ghMode)
+	}
 	if *showHelp {
-		_, err := fmt.Fprint(out, "Usage: pi-square [options] [-- pi arguments...]\n\nOptions:\n  --mode=dev  Disable GitHub mode prompt guidance (sandbox remains active)\n  --version   Show pi-square version\n  --help, -h  Show help\n\nPass arguments to pi after --, e.g. pi-square -- --version.\n")
+		_, err := fmt.Fprint(out, "Usage: pi-square [options] [-- pi arguments...]\n\nOptions:\n  --mode=dev            Disable GitHub mode prompt guidance (sandbox remains active)\n  --gh-mode=MODE        Initial GitHub mode: browse, local, or publish\n  --version             Show pi-square version\n  --help, -h            Show help\n\nPass arguments to pi after --, e.g. pi-square -- --version.\n")
 		return err
 	}
 	if *showVersion {
 		_, err := fmt.Fprintln(out, "pi-square", version)
 		return err
 	}
-	return launch(piArgs, *mode == "dev")
+	return launch(piArgs, *mode == "dev", *ghMode)
 }

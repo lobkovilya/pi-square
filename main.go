@@ -61,7 +61,7 @@ func fatal(err error) {
 	os.Exit(1)
 }
 
-func run(args []string, devMode bool) error {
+func run(args []string, devMode bool, initialGHMode string) error {
 	workdir, err := filepath.EvalSymlinks(mustAbs("."))
 	if err != nil {
 		return fmt.Errorf("resolve workdir: %w", err)
@@ -114,14 +114,15 @@ func run(args []string, devMode bool) error {
 		devModeValue = "1"
 	}
 	for key, value := range map[string]string{
-		"PI_SQUARE_STAGE_TOKEN": stageToken,
-		"PI_SQUARE_ROOT":        root,
-		"PI_SQUARE_WORKDIR":     workdir,
-		"PI_SQUARE_HOME":        home,
-		"PI_SQUARE_PI":          pi,
-		"PI_SQUARE_FFF":         s.dir,
-		"PI_SQUARE_HOST_UID":    strconv.Itoa(os.Getuid()),
-		"PI_SQUARE_DEV_MODE":    devModeValue,
+		"PI_SQUARE_STAGE_TOKEN":     stageToken,
+		"PI_SQUARE_ROOT":            root,
+		"PI_SQUARE_WORKDIR":         workdir,
+		"PI_SQUARE_HOME":            home,
+		"PI_SQUARE_PI":              pi,
+		"PI_SQUARE_FFF":             s.dir,
+		"PI_SQUARE_HOST_UID":        strconv.Itoa(os.Getuid()),
+		"PI_SQUARE_DEV_MODE":        devModeValue,
+		"PI_SQUARE_INITIAL_GH_MODE": initialGHMode,
 	} {
 		env = setEnv(env, key, value)
 	}

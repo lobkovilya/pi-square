@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { ExtensionAPI, ExtensionContext, ToolResultEvent } from "@earendil-works/pi-coding-agent";
+import { createLocalBashOperations, type ExtensionAPI, type ExtensionContext, type ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import { Key } from "@earendil-works/pi-tui";
 
 type GhMode = "browse" | "local" | "publish";
@@ -79,6 +79,11 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 	if (process.env.PI_SQUARE_ACTIVE !== "1") return;
 
 	let mode: GhMode = "browse";
+	const requestedInitialMode = process.env.PI_SQUARE_INITIAL_GH_MODE as GhMode | undefined;
+	// This is a launch option, not session state. Consume it so /reload cannot
+	// apply it again when the extension module is evaluated a second time.
+	delete process.env.PI_SQUARE_INITIAL_GH_MODE;
+	let applyRequestedInitialMode = requestedInitialMode === "browse" || requestedInitialMode === "local" || requestedInitialMode === "publish";
 	const workdir = fs.realpathSync.native(process.cwd());
 	const launchedMode = new Map<string, GhMode>();
 
@@ -163,6 +168,20 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 		return "browse";
 	}
 
+	// Interactive ! and !! do not emit tool_call. Keep pi's streaming,
+	// cancellation, truncation, and context behavior, but use the same launcher.
+	pi.on("user_bash", () => {
+		const launchMode = mode;
+		const local = createLocalBashOperations();
+		return {
+			operations: {
+				exec(command, cwd, options) {
+					return local.exec(routeCommand(command, launchMode), cwd, options);
+				},
+			},
+		};
+	});
+
 	pi.registerCommand("gh-mode", {
 		description: "Show or switch GitHub/git mode: /gh-mode, /gh-mode browse, /gh-mode local, /gh-mode publish, /gh-mode toggle",
 		handler: async (args, ctx) => {
@@ -184,7 +203,15 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
-		mode = restoreMode(ctx);
+		if (applyRequestedInitialMode) {
+			mode = requestedInitialMode as GhMode;
+			applyRequestedInitialMode = false;
+			// Preserve the initialized mode on extension reload, while a new session
+			// (which has no such entry) starts from its own restored/default mode.
+			persistMode();
+		} else {
+			mode = restoreMode(ctx);
+		}
 		updateStatus(ctx);
 	});
 

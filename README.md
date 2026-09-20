@@ -56,9 +56,11 @@ not grant write access to commands that already started in a read-only mode; a
 denied request stays denied, so the agent must launch a new command after the
 mode changes.
 
-When a command is denied because it performs a write, `gh-mode` offers to
+When a model bash command is denied because it performs a write, `gh-mode` offers to
 switch to `publish` or keep the current mode. Accepting the switch does not
-replay the command; the agent launches it again.
+replay the command; the agent launches it again. Interactive `! command` and
+`!! command` use the same sandbox and launch-time permissions. After a denial,
+switch explicitly with `/gh-mode publish` and rerun the interactive command.
 
 ## Trust boundary
 
@@ -118,6 +120,7 @@ pi-square [options] [-- pi arguments...]
 pi-square --version       # pi-square version
 pi-square --help          # pi-square help
 pi-square --mode=dev      # sandbox normally, without GitHub mode prompt guidance
+pi-square --gh-mode=local # explicitly select the initial GitHub mode
 pi-square -- --version    # pi version
 pi-square -- --model example "Explain this project"
 ```

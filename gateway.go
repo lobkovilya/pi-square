@@ -450,8 +450,12 @@ func (g *gateway) forward(class policyClass, req *http.Request, body []byte) (*h
 }
 
 func (g *gateway) denialResponse(req *http.Request, d *denial) *http.Response {
+	// GitHub clients (including gh's GraphQL client) display the top-level
+	// message for non-2xx responses. Keep the stable code visible there too,
+	// while preserving our structured error and denial header for API callers.
 	payload, _ := json.Marshal(map[string]any{
-		"error": map[string]string{"code": d.code, "message": d.message},
+		"message": d.code + ": " + d.message,
+		"error":   map[string]string{"code": d.code, "message": d.message},
 	})
 	header := http.Header{}
 	header.Set("Content-Type", "application/json")
