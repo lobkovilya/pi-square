@@ -42,6 +42,17 @@ jobs:
 
       - run: npm ci
 
+      - name: Diagnose host egress
+        working-directory: .
+        run: |
+          for name in HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; do
+            if [ -n "${!name:-}" ]; then echo "$name is set"; fi
+          done
+          curl --silent --show-error --connect-timeout 5 --max-time 15 --output /dev/null https://httpbin.org/get \
+            && echo 'proxied HTTPS: ok' || echo 'proxied HTTPS: failed'
+          curl --silent --show-error --connect-timeout 5 --max-time 15 --noproxy '*' --output /dev/null https://httpbin.org/get \
+            && echo 'direct HTTPS: ok' || echo 'direct HTTPS: failed'
+
       - name: Local sandbox tests
         run: npm test
 
