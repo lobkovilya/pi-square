@@ -28,6 +28,13 @@ func setupRestrictedRoot(root, workdir, home, fff, runtimeXDG string) error {
 			return err
 		}
 	}
+	// Ubuntu and other systemd hosts commonly make /etc/resolv.conf an
+	// absolute symlink into /run/systemd/resolve. /run is intentionally absent
+	// from the restricted root, so mount the symlink target as a single
+	// read-only file rather than exposing the host runtime directory.
+	if err := bindExternalSymlinkTarget(root, "/etc/resolv.conf", "/etc"); err != nil {
+		return fmt.Errorf("bind resolver configuration: %w", err)
+	}
 	if err := mountProc(root); err != nil {
 		return err
 	}
@@ -190,6 +197,18 @@ func dropCapabilities() error {
 		return err
 	}
 	return unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)
+}
+
+func bindExternalSymlinkTarget(root, path, includedRoot string) error {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return err
+	}
+	includedRoot = filepath.Clean(includedRoot)
+	if resolved == includedRoot || strings.HasPrefix(resolved, includedRoot+string(filepath.Separator)) {
+		return nil
+	}
+	return bind(root, resolved, resolved, true, false)
 }
 
 func bind(root, source, destination string, readonly, recursive bool) error {
