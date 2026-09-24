@@ -110,6 +110,15 @@ nix build
 nix run .
 ```
 
+## Tests
+
+```sh
+go test ./...
+go test -tags=e2e ./e2e -count=1 -timeout=15m -args -ginkgo.label-filter='!live'
+```
+
+The tagged Ginkgo suite drives real interactive pi through a Go PTY and the production sandbox. It defaults to local-only tests and needs no npm test harness. The separately authorized six-case live suite, fixture setup, credential policy, and diagnostics are documented in [`e2e/README.md`](e2e/README.md).
+
 ## Use
 
 Run it from a project directory:

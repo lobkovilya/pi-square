@@ -12,9 +12,6 @@ jobs:
   tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    defaults:
-      run:
-        working-directory: e2e
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,23 +24,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-          cache-dependency-path: e2e/package-lock.json
 
-      - name: Install sandbox prerequisites
+      - name: Install sandbox prerequisites and pinned pi runtime
         run: |
           sudo apt-get update
-          sudo apt-get install -y gh git curl util-linux coreutils
+          sudo apt-get install -y gh git curl coreutils
           # Ubuntu 24.04 restricts unprivileged user namespaces via AppArmor.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           # The sandbox mounts /usr, but not setup-node's /opt tool cache.
           sudo install -m 755 "$(command -v node)" /usr/local/bin/node
           sudo env "PATH=$PATH" npm install --global --prefix /usr/local @earendil-works/pi-coding-agent@0.84.4
 
-      - run: npm ci
+      - name: Go tests
+        run: go test ./...
 
-      - name: Local sandbox tests
-        run: npm test
+      - name: Local interactive E2E
+        run: go test -tags=e2e ./e2e -count=1 -timeout=15m -args -ginkgo.label-filter='!live'
 
       - name: Live GitHub tests
         env:
@@ -58,4 +54,4 @@ jobs:
             echo '::error::Live tests require PI_SQUARE_E2E_REPOSITORY and PI_SQUARE_E2E_GITHUB_TOKEN.'
             exit 1
           fi
-          npm run live
+          go test -tags=e2e ./e2e -count=1 -timeout=15m -args -ginkgo.label-filter=live

@@ -1,0 +1,71 @@
+package harness
+
+import (
+	"bytes"
+	"encoding/base64"
+	"strings"
+	"testing"
+)
+
+func TestShellJoin(t *testing.T) {
+	got := ShellJoin("plain", "it's", "", "$(bad)")
+	want := `'plain' 'it'"'"'s' '' '$(bad)'`
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestCaptureFragmentedWrappedAndBinary(t *testing.T) {
+	n := "0123456789abcdef01234567"
+	raw := []byte{0, 'a', '\n', 255, 1}
+	encoded := base64.StdEncoding.EncodeToString(raw)
+	screen := "echoed PSQ_ not a frame\nPSQ_" + n + ":137:" + encoded[:4] + "\n" + encoded[4:] + "\n:END" + n + "\n"
+	if !completionVisible(screen, n) {
+		t.Fatal("completion not found")
+	}
+	r, ok, err := decodeCapture(screen, n)
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if r.Status != 137 || !bytes.Equal(r.Output, raw) {
+		t.Fatalf("result %#v", r)
+	}
+}
+
+func TestCaptureRejectsMalformedAndTruncated(t *testing.T) {
+	n := "nonce"
+	if _, ok, err := decodeCapture("PSQ_nonce:x:AAAA:ENDnonce", n); ok || err == nil {
+		t.Fatalf("wanted malformed status, ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := decodeCapture("PSQ_nonce:0:AAAA", n); ok || err != nil {
+		t.Fatalf("truncated frame should remain incomplete")
+	}
+	if _, ok, err := decodeCapture("PSQ_nonce:0:%%%:ENDnonce", n); ok || err == nil {
+		t.Fatalf("wanted invalid base64")
+	}
+}
+
+func TestNonceIsolation(t *testing.T) {
+	old := "PSQ_old:0::ENDold\n"
+	if _, ok, err := decodeCapture(old, "new"); ok || err != nil {
+		t.Fatal("old nonce satisfied new capture")
+	}
+}
+
+func TestRedaction(t *testing.T) {
+	SetSecrets("very-secret")
+	defer SetSecrets()
+	if got := Redact("x very-secret y"); strings.Contains(got, "very-secret") || !strings.Contains(got, "[REDACTED]") {
+		t.Fatal(got)
+	}
+}
+
+func TestTerminalRedrawAndWrap(t *testing.T) {
+	term := newTerminal()
+	defer term.Close()
+	_, _ = term.Write([]byte("old\rnew\x1b[K\r\n" + strings.Repeat("x", 300)))
+	s := term.Screen()
+	if strings.Contains(s, "old") || !strings.Contains(s, "new") || !strings.Contains(s, strings.Repeat("x", 240)) {
+		t.Fatalf("screen reconstruction failed: %q", s)
+	}
+}
