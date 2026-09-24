@@ -1,52 +1,17 @@
+//go:build unix
+
 package harness
 
 import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 	"syscall"
 	"time"
 )
-
-// ProcessResult keeps command output separate from harness diagnostics.
-type ProcessResult struct {
-	Mode      string
-	Command   string
-	Status    int
-	Signal    string
-	Output    []byte
-	Stderr    string
-	TimedOut  bool
-	Elapsed   time.Duration
-	Completed bool
-}
-
-var secrets []string
-
-func SetSecrets(values ...string) {
-	secrets = secrets[:0]
-	for _, value := range values {
-		if value != "" {
-			secrets = append(secrets, value)
-		}
-	}
-}
-
-func Redact(value string) string {
-	for _, secret := range secrets {
-		value = strings.ReplaceAll(value, secret, "[REDACTED]")
-	}
-	return value
-}
-
-func FormatResult(r ProcessResult) string {
-	return Redact(fmt.Sprintf("mode=%s status=%d signal=%s elapsed=%s timedOut=%t completed=%t\ncommand=%s\noutput:\n%s\nstderr:\n%s",
-		r.Mode, r.Status, r.Signal, r.Elapsed, r.TimedOut, r.Completed, r.Command, r.Output, r.Stderr))
-}
 
 func CleanEnvironment(realToken string) []string {
 	blocked := map[string]bool{
@@ -64,6 +29,17 @@ func CleanEnvironment(realToken string) []string {
 		out = append(out, "GH_TOKEN="+realToken)
 	}
 	return out
+}
+
+func exitStatus(state *os.ProcessState) (status int, signal string) {
+	ws, ok := state.Sys().(syscall.WaitStatus)
+	if !ok {
+		return -1, ""
+	}
+	if ws.Signaled() {
+		return 128 + int(ws.Signal()), ws.Signal().String()
+	}
+	return ws.ExitStatus(), ""
 }
 
 // RunProcess runs a host command in its own process group and always reaps it.
@@ -89,28 +65,13 @@ func RunProcess(ctx context.Context, command string, args []string, cwd string, 
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		err = <-done
 	}
-	r.Elapsed, r.Output, r.Stderr = time.Since(started), stdout.Bytes(), Redact(stderr.String())
+	r.Elapsed, r.Output, r.Stderr = time.Since(started), RedactBytes(stdout.Bytes()), Redact(stderr.String())
 	if cmd.ProcessState != nil {
 		r.Completed = true
-		if status, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); ok {
-			if status.Signaled() {
-				r.Signal = status.Signal().String()
-				r.Status = 128 + int(status.Signal())
-			} else {
-				r.Status = status.ExitStatus()
-			}
-		}
+		r.Status, r.Signal = exitStatus(cmd.ProcessState)
 	}
 	if err != nil && r.Stderr == "" && !r.TimedOut {
 		r.Stderr = err.Error()
 	}
-	r.Output = []byte(Redact(string(r.Output)))
 	return r
-}
-
-func RequireSuccess(label string, r ProcessResult) error {
-	if r.Completed && r.Status == 0 && !r.TimedOut {
-		return nil
-	}
-	return fmt.Errorf("%s failed\n%s", label, FormatResult(r))
 }

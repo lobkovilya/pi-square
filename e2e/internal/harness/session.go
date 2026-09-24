@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"regexp"
@@ -23,21 +22,20 @@ const (
 	pollInterval          = 25 * time.Millisecond
 )
 
+var ErrSessionDeadline = errors.New("session deadline exceeded")
+
 var isolationArgs = []string{
 	"--no-session", "--no-extensions", "--no-skills", "--no-prompt-templates",
 	"--no-themes", "--no-context-files", "--no-approve", "--offline",
 }
 
-type SessionOptions struct {
-	Cwd, Mode, Guard string
-	Env              []string
-	Timeout          time.Duration
-	Cleanup          func()
+type SessionError struct {
+	Message, Screen string
+	Cause           error
 }
 
-type SessionError struct{ Message, Screen string }
-
 func (e *SessionError) Error() string { return Redact(e.Message + "\nTerminal:\n" + e.Screen) }
+func (e *SessionError) Unwrap() error { return e.Cause }
 
 type Session struct {
 	cmd               *exec.Cmd
@@ -49,10 +47,9 @@ type Session struct {
 	stateMu           sync.RWMutex
 	exited            bool
 	exitCode          int
-	signal            string
-	waitErr           error
 	waitDone          chan struct{}
 	readDone          chan struct{}
+	replyDone         chan struct{}
 	cleanup           func()
 	closeOnce         sync.Once
 }
@@ -74,10 +71,10 @@ func OpenPi(ctx context.Context, cmd *exec.Cmd, options SessionOptions) (*Sessio
 		timeout = defaultSessionTimeout
 	}
 	s := &Session{cmd: cmd, term: newTerminal(), started: started, deadline: started.Add(timeout), mode: options.Mode,
-		waitDone: make(chan struct{}), readDone: make(chan struct{}), cleanup: options.Cleanup, exitCode: -1}
+		waitDone: make(chan struct{}), readDone: make(chan struct{}), replyDone: make(chan struct{}), cleanup: options.Cleanup, exitCode: -1}
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: 240, Rows: 80})
 	if err != nil {
-		s.term.Close()
+		_ = s.term.Close()
 		if s.cleanup != nil {
 			s.cleanup()
 		}
@@ -85,7 +82,7 @@ func OpenPi(ctx context.Context, cmd *exec.Cmd, options SessionOptions) (*Sessio
 	}
 	s.pty = ptmx
 	go s.readPTY()
-	go func() { _, _ = io.Copy(lockedWriter{s}, s.term) }()
+	go s.forwardReplies()
 	go s.wait()
 	if err := s.Ready(ctx); err != nil {
 		_ = s.Close()
@@ -105,15 +102,15 @@ func withEnv(env []string, key, value string) []string {
 	return append(out, prefix+value)
 }
 
-type lockedWriter struct{ s *Session }
-
-func (w lockedWriter) Write(p []byte) (int, error) { return w.s.write(p) }
-
 func (s *Session) Invocation() string     { return ShellJoin(s.cmd.Args...) }
 func (s *Session) Screen() string         { return Redact(s.term.Screen()) }
 func (s *Session) Elapsed() time.Duration { return time.Since(s.started) }
 func (s *Session) Error(message string) error {
-	return &SessionError{message + "\ninvocation=" + s.Invocation() + "\ncwd=" + s.cmd.Dir, s.Screen()}
+	return s.fail(nil, message)
+}
+
+func (s *Session) fail(cause error, message string) error {
+	return &SessionError{Message: message + "\ninvocation=" + s.Invocation() + "\ncwd=" + s.cmd.Dir, Screen: s.Screen(), Cause: cause}
 }
 
 func (s *Session) readPTY() {
@@ -130,20 +127,31 @@ func (s *Session) readPTY() {
 	}
 }
 
-func (s *Session) wait() {
-	err := s.cmd.Wait()
-	s.stateMu.Lock()
-	s.exited, s.waitErr = true, err
-	if state := s.cmd.ProcessState; state != nil {
-		if ws, ok := state.Sys().(syscall.WaitStatus); ok {
-			if ws.Signaled() {
-				s.signal = ws.Signal().String()
-				s.exitCode = 128 + int(ws.Signal())
-			} else {
-				s.exitCode = ws.ExitStatus()
-			}
+// forwardReplies keeps draining after the PTY is gone: the emulator writes a
+// query reply synchronously inside Write, so an idle reader would park readPTY
+// while it holds the terminal lock.
+func (s *Session) forwardReplies() {
+	defer close(s.replyDone)
+	buf := make([]byte, 4096)
+	for {
+		n, err := s.term.Read(buf)
+		if n > 0 {
+			_, _ = s.write(buf[:n])
+		}
+		if err != nil {
+			return
 		}
 	}
+}
+
+func (s *Session) wait() {
+	_ = s.cmd.Wait()
+	code := -1
+	if state := s.cmd.ProcessState; state != nil {
+		code, _ = exitStatus(state)
+	}
+	s.stateMu.Lock()
+	s.exited, s.exitCode = true, code
 	s.stateMu.Unlock()
 	close(s.waitDone)
 }
@@ -165,7 +173,7 @@ func (s *Session) waitFor(ctx context.Context, condition func() (bool, error), l
 	for {
 		ok, err := condition()
 		if err != nil {
-			return s.Error(err.Error())
+			return s.fail(err, err.Error())
 		}
 		if ok {
 			return nil
@@ -174,11 +182,11 @@ func (s *Session) waitFor(ctx context.Context, condition func() (bool, error), l
 			return s.Error(fmt.Sprintf("pi exited during %s (status %d)", label, code))
 		}
 		if time.Now().After(s.deadline) {
-			return s.Error("session deadline exceeded during " + label)
+			return s.fail(ErrSessionDeadline, ErrSessionDeadline.Error()+" during "+label)
 		}
 		select {
 		case <-ctx.Done():
-			return s.Error(ctx.Err().Error() + " during " + label)
+			return s.fail(ctx.Err(), ctx.Err().Error()+" during "+label)
 		case <-time.After(pollInterval):
 		}
 	}
@@ -205,6 +213,8 @@ func (s *Session) Slash(ctx context.Context, command, expected string) error {
 
 type RunningCapture struct {
 	result    <-chan captureOutcome
+	outcome   captureOutcome
+	once      sync.Once
 	completed func() bool
 }
 type captureOutcome struct {
@@ -213,13 +223,13 @@ type captureOutcome struct {
 }
 
 func (r *RunningCapture) Completed() bool { return r.completed() }
-func (r *RunningCapture) Wait(ctx context.Context) (ProcessResult, error) {
-	select {
-	case out := <-r.result:
-		return out.result, out.err
-	case <-ctx.Done():
-		return ProcessResult{}, ctx.Err()
-	}
+
+// Wait needs no context: the capture goroutine is already bounded by the
+// StartBash context and the session deadline, and its result carries the
+// timeout diagnostics a caller would otherwise lose.
+func (r *RunningCapture) Wait() (ProcessResult, error) {
+	r.once.Do(func() { r.outcome = <-r.result })
+	return r.outcome.result, r.outcome.err
 }
 
 func (s *Session) StartBash(ctx context.Context, prefix, command string) (*RunningCapture, error) {
@@ -230,54 +240,59 @@ func (s *Session) StartBash(ctx context.Context, prefix, command string) (*Runni
 	if err != nil {
 		return nil, err
 	}
-	shell := captureShell(command, n)
 	truncations := count(s.Screen(), truncationNotice)
-	if _, err := s.write([]byte("\x1b[200~" + prefix + " " + shell + "\x1b[201~\r")); err != nil {
+	if _, err := s.write([]byte("\x1b[200~" + prefix + " " + captureShell(command, n) + "\x1b[201~\r")); err != nil {
 		return nil, s.Error("write bash command: " + err.Error())
 	}
 	out := make(chan captureOutcome, 1)
 	completed := func() bool { return completionVisible(s.Screen(), n) }
 	go func() {
-		result := ProcessResult{Status: -1}
+		result := ProcessResult{Status: -1, Mode: s.mode, Command: prefix + " " + command}
+		var frame ProcessResult
+		var ok bool
 		err := s.waitFor(ctx, func() (bool, error) {
-			if count(s.Screen(), truncationNotice) > truncations {
+			text := s.Screen()
+			if count(text, truncationNotice) > truncations {
 				return false, errors.New("command output exceeded pi's truncation limits and cannot be captured")
 			}
-			return completed(), nil
+			if !completionVisible(text, n) {
+				return false, nil
+			}
+			var err error
+			frame, ok, err = decodeCapture(text, n)
+			return ok || !headerVisible(text, n), err
 		}, "bash output")
+		for toggles := 0; err == nil && !ok && toggles < 2; toggles++ {
+			before := toolOutputToggles(s.Screen())
+			_, _ = s.write([]byte{0x0f})
+			err = s.waitFor(ctx, func() (bool, error) {
+				text := s.Screen()
+				var err error
+				frame, ok, err = decodeCapture(text, n)
+				return ok || (toolOutputToggles(text) != before && !headerVisible(text, n)), err
+			}, "bash completion")
+		}
+		if err == nil && !ok {
+			err = errors.New("bash result frame is not visible after expanding tool output")
+		}
 		if err == nil {
-			var ok bool
-			result, ok, err = decodeCapture(s.Screen(), n)
-			for toggles := 0; err == nil && !ok && toggles < 2; toggles++ {
-				before := toolOutputToggles(s.Screen())
-				_, _ = s.write([]byte{"\x0f"[0]})
-				err = s.waitFor(ctx, func() (bool, error) {
-					result, ok, err = decodeCapture(s.Screen(), n)
-					return ok || toolOutputToggles(s.Screen()) != before, err
-				}, "bash completion")
-			}
-			if err == nil && !ok {
-				err = errors.New("bash result frame is not visible after expanding tool output")
-			}
-			if err == nil {
-				if exited, code := s.isExited(); exited {
-					err = fmt.Errorf("pi exited with status %d after emitting a shell frame", code)
-				}
+			if exited, code := s.isExited(); exited {
+				err = fmt.Errorf("pi exited with status %d after emitting a shell frame", code)
 			}
 		}
-		result.Mode = s.mode
-		result.Command = prefix + " " + command
-		result.Elapsed = s.Elapsed()
-		result.TimedOut = errors.Is(ctx.Err(), context.DeadlineExceeded) || (err != nil && strings.Contains(err.Error(), "deadline exceeded"))
-		if err != nil {
+		if err == nil {
+			result.Status, result.Output, result.Completed = frame.Status, RedactBytes(frame.Output), true
+		} else {
 			var sessionErr *SessionError
 			if !errors.As(err, &sessionErr) {
 				err = s.Error(err.Error())
 			}
 		}
+		result.Elapsed = s.Elapsed()
+		result.TimedOut = errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrSessionDeadline)
 		out <- captureOutcome{result, err}
 	}()
-	return &RunningCapture{out, completed}, nil
+	return &RunningCapture{result: out, completed: completed}, nil
 }
 
 var toolStatus = regexp.MustCompile(`Tool output: (?:expanded|collapsed)`)
@@ -291,21 +306,22 @@ func (s *Session) Bash(ctx context.Context, prefix, command string) (ProcessResu
 	if err != nil {
 		return ProcessResult{}, err
 	}
-	return r.Wait(ctx)
+	return r.Wait()
 }
 
 func (s *Session) Quit(ctx context.Context) error {
 	if _, err := s.write([]byte("/quit\r")); err != nil {
 		return s.Error("write /quit: " + err.Error())
 	}
-	if err := s.waitFor(ctx, func() (bool, error) {
-		exited, code := s.isExited()
-		if exited && code != 0 {
-			return false, fmt.Errorf("pi exited with status %d", code)
-		}
-		return exited, nil
-	}, "clean exit"); err != nil {
-		return err
+	select {
+	case <-s.waitDone:
+	case <-ctx.Done():
+		return s.fail(ctx.Err(), ctx.Err().Error()+" during clean exit")
+	case <-time.After(time.Until(s.deadline)):
+		return s.fail(ErrSessionDeadline, ErrSessionDeadline.Error()+" during clean exit")
+	}
+	if _, code := s.isExited(); code != 0 {
+		return s.Error(fmt.Sprintf("pi exited with status %d during clean exit", code))
 	}
 	return nil
 }
@@ -319,14 +335,13 @@ func (s *Session) Close() error {
 		case <-s.waitDone:
 		case <-time.After(5 * time.Second):
 		}
-		if s.pty != nil {
-			_ = s.pty.Close()
-		}
-		_ = s.term.Close()
+		_ = s.pty.Close()
 		select {
 		case <-s.readDone:
 		case <-time.After(time.Second):
 		}
+		_ = s.term.Close()
+		<-s.replyDone
 		if s.cleanup != nil {
 			s.cleanup()
 		}

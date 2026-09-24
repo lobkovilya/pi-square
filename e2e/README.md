@@ -27,7 +27,7 @@ Live selection runs exactly six append-only specs: issue creation and an httpbin
 go test -tags=e2e ./e2e -count=1 -timeout=15m -args -ginkgo.label-filter=live
 ```
 
-Missing prerequisites fail an explicitly requested live run. Created issues are never retried, closed, or deleted. Verification paginates the complete REST issue listing under a deadline rather than relying on search indexing.
+Missing prerequisites fail an explicitly requested live run. Created issues are never retried, closed, or deleted. Verification lists issues updated since the spec started through the REST API rather than relying on search indexing; a failing live spec does not skip the others.
 
 Create a fixture only as a separately authenticated, explicitly confirmed operation:
 

@@ -1,3 +1,5 @@
+//go:build unix
+
 package harness
 
 import (
@@ -8,11 +10,14 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 )
 
 const (
 	markerSuffix  = ".pi-square-e2e-owner.json"
 	fixtureReadme = "Private fixture repository for pi-square sandbox integration tests."
+	// GitHub's updated_at clock and the runner's clock need not agree exactly.
+	issueClockSkew = 5 * time.Minute
 )
 
 type LiveFixture struct {
@@ -67,7 +72,7 @@ func (f *LiveFixture) validate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if string(r.Output) != fixtureReadme+"\n" {
+	if strings.TrimRight(string(r.Output), "\r\n") != fixtureReadme {
 		return fmt.Errorf("fixture %s has unexpected README.md content", f.Repository)
 	}
 	return nil
@@ -201,15 +206,19 @@ func (f *LiveFixture) API(ctx context.Context, path string) (map[string]any, err
 	err = json.Unmarshal(r.Output, &out)
 	return out, err
 }
-func (f *LiveFixture) FindIssues(ctx context.Context, identifier string) ([]map[string]any, error) {
+
+// FindIssues lists only issues touched since the given time, so the append-only
+// fixture's history never has to be paged through.
+func (f *LiveFixture) FindIssues(ctx context.Context, identifier string, since time.Time) ([]map[string]any, error) {
 	var matches []map[string]any
+	updatedAfter := since.Add(-issueClockSkew).UTC().Format(time.RFC3339)
 	for page := 1; ; page++ {
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("listing all fixture issues: %w", ctx.Err())
+			return nil, fmt.Errorf("listing recent fixture issues: %w", ctx.Err())
 		default:
 		}
-		r, err := f.gh(ctx, "api", fmt.Sprintf("repos/%s/issues?state=all&per_page=100&page=%d", f.Repository, page))
+		r, err := f.gh(ctx, "api", fmt.Sprintf("repos/%s/issues?state=all&per_page=100&since=%s&page=%d", f.Repository, updatedAfter, page))
 		if err != nil {
 			return nil, err
 		}

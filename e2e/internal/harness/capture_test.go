@@ -45,6 +45,23 @@ func TestCaptureRejectsMalformedAndTruncated(t *testing.T) {
 	}
 }
 
+func TestCaptureTornStatusRetriesInsteadOfFailing(t *testing.T) {
+	n := "nonce"
+	for _, screen := range []string{"PSQ_nonce:", "PSQ_nonce:\nAAAA\n:ENDnonce\n", "PSQ_nonce:13\nAAAA\n:ENDnonce\n"} {
+		if _, ok, err := decodeCapture(screen, n); ok || err != nil {
+			t.Fatalf("%q: partially painted status must be retried, ok=%v err=%v", screen, ok, err)
+		}
+	}
+	for _, screen := range []string{"PSQ_nonce:1x\nAAAA\n:ENDnonce\n", "PSQ_nonce:1234:AAAA:ENDnonce", "PSQ_nonce:999:AAAA:ENDnonce"} {
+		if _, ok, err := decodeCapture(screen, n); ok || err == nil {
+			t.Fatalf("%q: status on the header line that can never complete must fail", screen)
+		}
+	}
+	if !headerVisible("x PSQ_nonce:", n) || headerVisible("PSQ_other:", n) {
+		t.Fatal("headerVisible must key on the exact nonce")
+	}
+}
+
 func TestNonceIsolation(t *testing.T) {
 	old := "PSQ_old:0::ENDold\n"
 	if _, ok, err := decodeCapture(old, "new"); ok || err != nil {

@@ -26,7 +26,7 @@ func lines(output []byte) map[string]string {
 var _ = Describe("sandbox permissions and isolation", func() {
 	It("defaults to browse when --gh-mode is absent", func(ctx SpecContext) {
 		// given
-		opts, err := sessionOptions("browse")
+		opts, err := fixture.SessionOptions("browse")
 		Expect(err).NotTo(HaveOccurred())
 		session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--"), opts)
 		Expect(err).NotTo(HaveOccurred())
@@ -43,7 +43,7 @@ var _ = Describe("sandbox permissions and isolation", func() {
 
 	It("applies browse, local, publish, and toggle to newly launched ! and !! commands", func(ctx SpecContext) {
 		// given
-		opts, err := sessionOptions("browse")
+		opts, err := fixture.SessionOptions("browse")
 		Expect(err).NotTo(HaveOccurred())
 		session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode=browse", "--"), opts)
 		Expect(err).NotTo(HaveOccurred())
@@ -78,8 +78,7 @@ var _ = Describe("sandbox permissions and isolation", func() {
 		// given
 		release := "e2e-release"
 		_ = os.Remove(fixture.Workdir + "/" + release)
-		DeferCleanup(os.Remove, fixture.Workdir+"/"+release)
-		opts, err := sessionOptions("browse")
+		opts, err := fixture.SessionOptions("browse")
 		Expect(err).NotTo(HaveOccurred())
 		session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode=browse", "--"), opts)
 		Expect(err).NotTo(HaveOccurred())
@@ -93,7 +92,8 @@ var _ = Describe("sandbox permissions and isolation", func() {
 		// Host-side release is mechanics, not an action under test; pi accepts only
 		// one interactive shell command at a time. The read-only mount observes it.
 		Expect(os.WriteFile(fixture.Workdir+"/"+release, []byte("release\n"), 0600)).To(Succeed())
-		old, err := running.Wait(ctx)
+		DeferCleanup(os.Remove, fixture.Workdir+"/"+release)
+		old, err := running.Wait()
 		Expect(err).NotTo(HaveOccurred())
 		newResult, err := session.Bash(ctx, "!", "if touch probe-file 2>/dev/null; then rm -f probe-file; echo writable; else echo readonly; fi")
 		Expect(err).NotTo(HaveOccurred())
@@ -108,7 +108,7 @@ var _ = Describe("sandbox permissions and isolation", func() {
 	DescribeTable("exposes only the dummy credential and restricted root",
 		func(ctx SpecContext, mode string) {
 			// given
-			opts, err := sessionOptions(mode)
+			opts, err := fixture.SessionOptions(mode)
 			Expect(err).NotTo(HaveOccurred())
 			session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode="+mode, "--"), opts)
 			Expect(err).NotTo(HaveOccurred())
@@ -150,7 +150,7 @@ var _ = Describe("sandbox permissions and isolation", func() {
 	DescribeTable("denies REST writes and GraphQL mutations without escalation",
 		func(ctx SpecContext, mode string) {
 			// given
-			opts, err := sessionOptions(mode)
+			opts, err := fixture.SessionOptions(mode)
 			Expect(err).NotTo(HaveOccurred())
 			session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode="+mode, "--"), opts)
 			Expect(err).NotTo(HaveOccurred())
@@ -198,7 +198,7 @@ var _ = Describe("sandbox permissions and isolation", func() {
 
 	It("blocks proxy bypass, plain HTTP, private destinations, and non-443 ports", func(ctx SpecContext) {
 		// given
-		opts, err := sessionOptions("browse")
+		opts, err := fixture.SessionOptions("browse")
 		Expect(err).NotTo(HaveOccurred())
 		session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode=browse", "--"), opts)
 		Expect(err).NotTo(HaveOccurred())

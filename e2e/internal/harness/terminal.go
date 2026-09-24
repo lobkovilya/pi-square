@@ -1,14 +1,16 @@
 package harness
 
 import (
+	"io"
 	"strings"
 	"sync"
 
 	vt "github.com/charmbracelet/x/vt"
 )
 
-// terminal is a concurrency-safe adapter around a real VT emulator. Query
-// replies are exposed through Read and copied back to the PTY by Session.
+// terminal serialises emulator access. Read stays outside the lock because it
+// parks on the emulator's reply pipe; Close ends that pipe directly instead of
+// racing the emulator's unsynchronised closed flag against a parked Read.
 type terminal struct {
 	mu sync.RWMutex
 	vt *vt.Emulator
@@ -27,39 +29,29 @@ func (t *terminal) Write(p []byte) (int, error) {
 }
 
 func (t *terminal) Read(p []byte) (int, error) { return t.vt.Read(p) }
-func (t *terminal) Close() error               { return t.vt.Close() }
 
-func cellText(cell interface{ String() string }) string { return cell.String() }
+func (t *terminal) Close() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if pw, ok := t.vt.InputPipe().(*io.PipeWriter); ok {
+		return pw.CloseWithError(io.EOF)
+	}
+	return t.vt.Close()
+}
 
+// Screen joins scrollback and the visible screen with physical newlines, which
+// is safe because capture base64 permits whitespace and markers fit in a row.
 func (t *terminal) Screen() string {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	var b strings.Builder
-	// Physical newlines are safe: capture base64 deliberately permits whitespace,
-	// and fixed markers are shorter than the 240-column terminal.
 	if sb := t.vt.Scrollback(); sb != nil {
 		for _, line := range sb.Lines() {
 			b.WriteByte('\n')
-			for i := range line {
-				b.WriteString(line[i].Content)
-			}
+			b.WriteString(line.String())
 		}
 	}
-	for y := 0; y < t.vt.Height(); y++ {
-		b.WriteByte('\n')
-		lineStart := b.Len()
-		for x := 0; x < t.vt.Width(); x++ {
-			if cell := t.vt.CellAt(x, y); cell != nil {
-				b.WriteString(cell.Content)
-			}
-		}
-		// Avoid huge trailing blank screens without changing interior spacing.
-		line := strings.TrimRight(b.String()[lineStart:], " ")
-		if len(line) != b.Len()-lineStart {
-			text := b.String()[:lineStart] + line
-			b.Reset()
-			b.WriteString(text)
-		}
-	}
+	b.WriteByte('\n')
+	b.WriteString(t.vt.String())
 	return strings.TrimRight(b.String(), "\n ")
 }

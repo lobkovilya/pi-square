@@ -3,7 +3,7 @@
 package e2e_test
 
 import (
-	"bytes"
+	"context"
 	"os/exec"
 	"strings"
 	"time"
@@ -17,7 +17,7 @@ var _ = Describe("interactive routing and capture", func() {
 	DescribeTable("routes explicit ! and !! through the production sandbox",
 		func(ctx SpecContext, mode, prefix, writability string) {
 			// given
-			opts, err := sessionOptions(mode)
+			opts, err := fixture.SessionOptions(mode)
 			Expect(err).NotTo(HaveOccurred())
 			command := exec.Command(fixture.Binary, "--gh-mode="+mode, "--")
 			session, err := harness.OpenPi(ctx, command, opts)
@@ -28,7 +28,7 @@ var _ = Describe("interactive routing and capture", func() {
 			result, err := session.Bash(ctx, prefix, "printf 'hello\\n'; printf 'stderr\\n' >&2; if touch protected 2>/dev/null; then echo writable; else echo readonly; fi; exit 7")
 
 			// then
-			Expect(err).NotTo(HaveOccurred(), session.Screen())
+			Expect(err).NotTo(HaveOccurred())
 			Expect(result.Status).To(Equal(7))
 			Expect(result.Output).To(Equal([]byte("hello\nstderr\n" + writability + "\n")))
 			Expect(session.Quit(ctx)).To(Succeed())
@@ -41,7 +41,7 @@ var _ = Describe("interactive routing and capture", func() {
 	It("captures wrapped ANSI, binary, empty, and signal-terminated output losslessly", func(ctx SpecContext) {
 		// given
 		mode := "browse"
-		opts, err := sessionOptions(mode)
+		opts, err := fixture.SessionOptions(mode)
 		Expect(err).NotTo(HaveOccurred())
 		session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode=browse", "--"), opts)
 		Expect(err).NotTo(HaveOccurred())
@@ -58,7 +58,10 @@ var _ = Describe("interactive routing and capture", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		// then
+		Expect(wrapped.Status).To(Equal(0))
 		Expect(wrapped.Output).To(Equal([]byte(strings.Repeat("0", 4000) + "\n\x1b[31mred\x1b[0m\n")))
+		Expect(binary.Status).To(Equal(0))
+		Expect(binary.Output).To(HaveLen(404))
 		Expect(binary.Output[:400]).To(MatchRegexp(`^[A-Za-z0-9+/=]{400}$`))
 		Expect(binary.Output[400:]).To(Equal([]byte{0, 1, 2, '\n'}))
 		Expect(empty.Status).To(Equal(0))
@@ -70,7 +73,7 @@ var _ = Describe("interactive routing and capture", func() {
 	It("times out a hung shell after readiness without fabricating a result", func(ctx SpecContext) {
 		// given
 		mode := "browse"
-		opts, err := sessionOptions(mode)
+		opts, err := fixture.SessionOptions(mode)
 		Expect(err).NotTo(HaveOccurred())
 		opts.Timeout = 90 * time.Second
 		session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode=browse", "--"), opts)
@@ -83,10 +86,12 @@ var _ = Describe("interactive routing and capture", func() {
 		result, err := session.Bash(op, "!", "sleep 30")
 
 		// then
-		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("deadline exceeded"))
+		Expect(err).To(MatchError(context.DeadlineExceeded))
+		Expect(err.Error()).To(ContainSubstring("deadline exceeded during bash output"))
+		Expect(result.TimedOut).To(BeTrue())
 		Expect(result.Completed).To(BeFalse())
+		Expect(result.Status).To(Equal(-1))
 		Expect(result.Output).To(BeEmpty())
-		Expect(bytes.Contains([]byte(session.Screen()), []byte("PSQ_"))).To(BeTrue()) // command was accepted, but no completion frame exists
+		Expect(session.Screen()).To(ContainSubstring("PSQ_")) // command was accepted, but no completion frame exists
 	})
 })

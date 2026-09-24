@@ -1,3 +1,5 @@
+//go:build unix
+
 package harness
 
 import (
@@ -19,6 +21,13 @@ var Modes = []string{"browse", "local", "publish"}
 type Fixture struct {
 	Root, Binary, Workdir, HostHome, HostSecret string
 	buildDir, secretDir                         string
+}
+
+type SessionOptions struct {
+	Cwd, Mode, Guard string
+	Env              []string
+	Timeout          time.Duration
+	Cleanup          func()
 }
 
 func ProjectRoot() (string, error) {
@@ -105,8 +114,14 @@ func (f *Fixture) Environment(token string) []string {
 	return append(env, "GH_TOKEN="+token)
 }
 
-func (f *Fixture) SessionOptions(mode string, token string) (SessionOptions, error) {
-	return f.SessionOptionsAt(mode, token, f.Workdir)
+// SessionOptions is the sandbox configuration: fake host token, scratch workdir.
+func (f *Fixture) SessionOptions(mode string) (SessionOptions, error) {
+	return f.SessionOptionsAt(mode, "", f.Workdir)
+}
+
+// SessionOptions is the live configuration: real token, fixture checkout.
+func (f *LiveFixture) SessionOptions(mode string) (SessionOptions, error) {
+	return f.Fixture.SessionOptionsAt(mode, f.Token, f.Checkout)
 }
 
 func (f *Fixture) SessionOptionsAt(mode string, token string, cwd string) (SessionOptions, error) {

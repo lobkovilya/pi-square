@@ -11,6 +11,8 @@ import (
 
 const truncationNotice = "Output truncated. Full output:"
 
+var statusField = regexp.MustCompile(`^(\d{1,3}):`)
+
 func nonce() (string, error) {
 	b := make([]byte, 12)
 	if _, err := rand.Read(b); err != nil {
@@ -30,6 +32,13 @@ func completionVisible(screen, nonce string) bool {
 	return re.MatchString(screen)
 }
 
+func headerVisible(screen, nonce string) bool {
+	return strings.Contains(screen, "PSQ_"+nonce+":")
+}
+
+// decodeCapture reports ok=false without an error while the frame is only
+// partially painted; a redraw that stopped inside the status digits must be
+// polled again, not treated as corrupt.
 func decodeCapture(screen, nonce string) (ProcessResult, bool, error) {
 	start := "PSQ_" + nonce + ":"
 	end := ":END" + nonce
@@ -38,15 +47,22 @@ func decodeCapture(screen, nonce string) (ProcessResult, bool, error) {
 		return ProcessResult{}, false, nil
 	}
 	rest := screen[i+len(start):]
-	colon := strings.IndexByte(rest, ':')
-	if colon < 0 {
-		return ProcessResult{}, false, fmt.Errorf("malformed capture: missing status separator")
+	head := rest
+	if nl := strings.IndexByte(head, '\n'); nl >= 0 {
+		head = head[:nl]
 	}
-	status, err := strconv.Atoi(strings.TrimSpace(rest[:colon]))
-	if err != nil || status < 0 || status > 255 {
-		return ProcessResult{}, false, fmt.Errorf("malformed capture status %q", rest[:colon])
+	field := statusField.FindStringSubmatch(head)
+	if field == nil {
+		if len(head) <= 3 && strings.Trim(head, "0123456789") == "" {
+			return ProcessResult{}, false, nil
+		}
+		return ProcessResult{}, false, fmt.Errorf("malformed capture status %q", head)
 	}
-	payload := rest[colon+1:]
+	status, _ := strconv.Atoi(field[1])
+	if status > 255 {
+		return ProcessResult{}, false, fmt.Errorf("malformed capture status %q", field[1])
+	}
+	payload := rest[len(field[0]):]
 	j := strings.Index(payload, end)
 	if j < 0 {
 		return ProcessResult{}, false, nil
