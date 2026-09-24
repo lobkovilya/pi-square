@@ -105,9 +105,8 @@ var _ = Describe("sandbox permissions and isolation", func() {
 		Expect(session.Quit(ctx)).To(Succeed())
 	})
 
-	for _, mode := range harness.Modes {
-		mode := mode
-		It(mode+" exposes only the dummy credential and restricted root", func(ctx SpecContext) {
+	DescribeTable("exposes only the dummy credential and restricted root",
+		func(ctx SpecContext, mode string) {
 			// given
 			opts, err := sessionOptions(mode)
 			Expect(err).NotTo(HaveOccurred())
@@ -142,12 +141,14 @@ var _ = Describe("sandbox permissions and isolation", func() {
 				Expect(v["HOME"]).To(MatchRegexp(`^/tmp/pi-command-home-`))
 			}
 			Expect(session.Quit(ctx)).To(Succeed())
-		})
-	}
+		},
+		Entry("in browse mode", "browse"),
+		Entry("in local mode", "local"),
+		Entry("in publish mode", "publish"),
+	)
 
-	for _, mode := range []string{"browse", "local"} {
-		mode := mode
-		It(mode+" denies REST writes and GraphQL mutations without escalation", func(ctx SpecContext) {
+	DescribeTable("denies REST writes and GraphQL mutations without escalation",
+		func(ctx SpecContext, mode string) {
 			// given
 			opts, err := sessionOptions(mode)
 			Expect(err).NotTo(HaveOccurred())
@@ -160,21 +161,23 @@ var _ = Describe("sandbox permissions and isolation", func() {
 			}
 
 			// when
-			rest, err := session.Bash(ctx, "!", "curl -sS -D - -X POST -H 'Content-Type: application/json' -d '{}' https://api.github.com/user/repos -w '\\nHTTP_CODE=%{http_code}\\n'")
-			Expect(err).NotTo(HaveOccurred())
+			rest, restErr := session.Bash(ctx, "!", "curl -sS -D - -X POST -H 'Content-Type: application/json' -d '{}' https://api.github.com/user/repos -w '\\nHTTP_CODE=%{http_code}\\n'")
 			text := string(rest.Output)
+			var decodeErr error
 			for _, line := range strings.Split(text, "\n") {
 				if strings.HasPrefix(line, "{") {
-					Expect(json.Unmarshal([]byte(line), &body)).To(Succeed())
+					decodeErr = json.Unmarshal([]byte(line), &body)
 				}
 			}
-			mutation, err := session.Bash(ctx, "!", "GH_NO_UPDATE_NOTIFIER=1 gh api graphql -f query='mutation{__typename}'")
-			Expect(err).NotTo(HaveOccurred())
-			post, err := session.Bash(ctx, "!", "GH_NO_UPDATE_NOTIFIER=1 gh api -X POST /user/repos -f name=x")
-			Expect(err).NotTo(HaveOccurred())
+			mutation, mutationErr := session.Bash(ctx, "!", "GH_NO_UPDATE_NOTIFIER=1 gh api graphql -f query='mutation{__typename}'")
+			post, postErr := session.Bash(ctx, "!", "GH_NO_UPDATE_NOTIFIER=1 gh api -X POST /user/repos -f name=x")
 			screen := session.Screen()
 
 			// then
+			Expect(restErr).NotTo(HaveOccurred())
+			Expect(decodeErr).NotTo(HaveOccurred())
+			Expect(mutationErr).NotTo(HaveOccurred())
+			Expect(postErr).NotTo(HaveOccurred())
 			Expect(rest.Status).To(Equal(0))
 			Expect(text).To(MatchRegexp(`(?m)^HTTP/1\.1 403 `))
 			Expect(text).To(MatchRegexp(`(?m)^X-Pi-Square-Denial: write_requires_publish\r?$`))
@@ -188,8 +191,10 @@ var _ = Describe("sandbox permissions and isolation", func() {
 			Expect(screen).NotTo(ContainSubstring("Switch mode to publish"))
 			Expect(session.Slash(ctx, "/gh-mode status", "GitHub mode: "+mode)).To(Succeed())
 			Expect(session.Quit(ctx)).To(Succeed())
-		})
-	}
+		},
+		Entry("in browse mode", "browse"),
+		Entry("in local mode", "local"),
+	)
 
 	It("blocks proxy bypass, plain HTTP, private destinations, and non-443 ports", func(ctx SpecContext) {
 		// given

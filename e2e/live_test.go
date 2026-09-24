@@ -26,24 +26,20 @@ func unique(prefix string) string {
 }
 
 var _ = Describe("live gateway smoke tests", Label("live"), Ordered, func() {
-	for _, tc := range []struct {
-		mode    string
-		allowed bool
-	}{{"browse", false}, {"local", false}, {"publish", true}} {
-		tc := tc
-		It("runs gh issue create in "+tc.mode+" mode", func(ctx SpecContext) {
+	DescribeTable("runs gh issue create",
+		func(ctx SpecContext, mode string, allowed bool) {
 			// given
-			id := unique("pi-square-e2e-issue-" + tc.mode + "-")
+			id := unique("pi-square-e2e-issue-" + mode + "-")
 			title := "[" + id + "] live gateway smoke test"
-			body := "Append-only live test artifact. Identifier: " + id + ". Mode: " + tc.mode + "."
+			body := "Append-only live test artifact. Identifier: " + id + ". Mode: " + mode + "."
 			host, cancel := bounded(ctx, 60*time.Second)
 			defer cancel()
 			before, err := liveFixture.FindIssues(host, id)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(before).To(BeEmpty())
-			opts, err := sessionOptions(tc.mode)
+			opts, err := sessionOptions(mode)
 			Expect(err).NotTo(HaveOccurred())
-			session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode="+tc.mode, "--"), opts)
+			session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode="+mode, "--"), opts)
 			Expect(err).NotTo(HaveOccurred())
 			DeferCleanup(session.Close)
 			command := harness.ShellJoin("gh", "issue", "create", "--repo", liveFixture.Repository, "--title", title, "--body", body)
@@ -54,7 +50,7 @@ var _ = Describe("live gateway smoke tests", Label("live"), Ordered, func() {
 			// then
 			Expect(err).NotTo(HaveOccurred())
 			diagnostic := harness.FormatResult(result)
-			if !tc.allowed {
+			if !allowed {
 				Expect(result.Status).NotTo(Equal(0), diagnostic)
 				Expect(string(result.Output)).To(ContainSubstring("write_requires_publish"), diagnostic)
 				check, cancel := bounded(ctx, 60*time.Second)
@@ -80,12 +76,14 @@ var _ = Describe("live gateway smoke tests", Label("live"), Ordered, func() {
 				GinkgoWriter.Printf("Retained append-only issue: %s\n", urls[0])
 			}
 			Expect(session.Quit(ctx)).To(Succeed())
-		})
-	}
+		},
+		Entry("in browse mode", "browse", false),
+		Entry("in local mode", "local", false),
+		Entry("in publish mode", "publish", true),
+	)
 
-	for _, mode := range []string{"browse", "local", "publish"} {
-		mode := mode
-		It("runs curl to public HTTPS in "+mode+" mode", func(ctx SpecContext) {
+	DescribeTable("runs curl to public HTTPS",
+		func(ctx SpecContext, mode string) {
 			// given
 			id := unique("pi-square-e2e-http-" + mode + "-")
 			target := "https://httpbin.org/get?pi_square_id=" + url.QueryEscape(id)
@@ -116,6 +114,9 @@ var _ = Describe("live gateway smoke tests", Label("live"), Ordered, func() {
 			Expect(json.Unmarshal([]byte(strings.TrimSpace(output[start:marker])), &response)).To(Succeed(), diagnostic)
 			Expect(response.Args.ID).To(Equal(id))
 			Expect(session.Quit(ctx)).To(Succeed())
-		})
-	}
+		},
+		Entry("in browse mode", "browse"),
+		Entry("in local mode", "local"),
+		Entry("in publish mode", "publish"),
+	)
 })

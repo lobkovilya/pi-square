@@ -14,39 +14,29 @@ import (
 )
 
 var _ = Describe("interactive routing and capture", func() {
-	It("routes explicit ! and !! through the production sandbox", func(ctx SpecContext) {
-		// given
-		type observation struct {
-			mode   string
-			result harness.ProcessResult
-		}
-		var observations []observation
-
-		// when
-		for _, mode := range harness.Modes {
+	DescribeTable("routes explicit ! and !! through the production sandbox",
+		func(ctx SpecContext, mode, prefix, writability string) {
+			// given
 			opts, err := sessionOptions(mode)
 			Expect(err).NotTo(HaveOccurred())
 			command := exec.Command(fixture.Binary, "--gh-mode="+mode, "--")
 			session, err := harness.OpenPi(ctx, command, opts)
 			Expect(err).NotTo(HaveOccurred())
 			DeferCleanup(session.Close)
-			prefix := "!"
-			if mode == "local" {
-				prefix = "!!"
-			}
-			result, err := session.Bash(ctx, prefix, "printf 'hello\\n'; printf 'stderr\\n' >&2; if touch protected 2>/dev/null; then echo writable; else echo readonly; fi; exit 7")
-			Expect(err).NotTo(HaveOccurred(), session.Screen())
-			observations = append(observations, observation{mode: mode, result: result})
-			Expect(session.Quit(ctx)).To(Succeed())
-		}
 
-		// then
-		for _, observation := range observations {
-			Expect(observation.result.Status).To(Equal(7), observation.mode)
-			writability := map[bool]string{true: "readonly", false: "writable"}[observation.mode == "browse"]
-			Expect(observation.result.Output).To(Equal([]byte("hello\nstderr\n"+writability+"\n")), observation.mode)
-		}
-	})
+			// when
+			result, err := session.Bash(ctx, prefix, "printf 'hello\\n'; printf 'stderr\\n' >&2; if touch protected 2>/dev/null; then echo writable; else echo readonly; fi; exit 7")
+
+			// then
+			Expect(err).NotTo(HaveOccurred(), session.Screen())
+			Expect(result.Status).To(Equal(7))
+			Expect(result.Output).To(Equal([]byte("hello\nstderr\n" + writability + "\n")))
+			Expect(session.Quit(ctx)).To(Succeed())
+		},
+		Entry("in browse mode", "browse", "!", "readonly"),
+		Entry("in local mode", "local", "!!", "writable"),
+		Entry("in publish mode", "publish", "!", "writable"),
+	)
 
 	It("captures wrapped ANSI, binary, empty, and signal-terminated output losslessly", func(ctx SpecContext) {
 		// given
