@@ -13,6 +13,62 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+var _ = Describe("mode presentation in the interactive terminal", func() {
+	DescribeTable("shows the launch mode and ordered resource indicators",
+		func(ctx SpecContext, mode, row, named string) {
+			// given
+			opts, err := fixture.SessionOptions(mode)
+			Expect(err).NotTo(HaveOccurred())
+			session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode="+mode, "--"), opts)
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(session.Close)
+
+			// when
+			Eventually(session.Screen).WithTimeout(3 * time.Second).Should(ContainSubstring(row))
+			startup := session.Screen() // Ready invoked /gh-mode status.
+
+			// then
+			Expect(startup).To(ContainSubstring(row))
+			Expect(startup).To(ContainSubstring(named))
+			Expect(startup).To(ContainSubstring("GitHub API RO covers gateway-authenticated"))
+			Expect(startup).To(ContainSubstring("running commands keep their permissions"))
+			Expect(session.Quit(ctx)).To(Succeed())
+		},
+		Entry("browse", "browse", "browse ·  ro ·  ro ·  ro ·  rw", "Workdir: RO · Local Git: RO · GitHub API: RO · Net: RW"),
+		Entry("local", "local", "local ·  rw ·  rw ·  ro ·  rw", "Workdir: RW · Local Git: RW · GitHub API: RO · Net: RW"),
+		Entry("publish", "publish", "publish ·  rw ·  rw ·  rw ·  rw", "Workdir: RW · Local Git: RW · GitHub API: RW · Net: RW"),
+	)
+
+	It("updates on commands, cycling and reload, keeping the mode visible when narrow", func(ctx SpecContext) {
+		// given
+		opts, err := fixture.SessionOptions("browse")
+		Expect(err).NotTo(HaveOccurred())
+		session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode=browse", "--"), opts)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+
+		// when
+		Expect(session.Slash(ctx, "/gh-mode local", "Local Git: RW · GitHub API: RO")).To(Succeed())
+		local := session.Screen()
+		Expect(session.Slash(ctx, "/gh-mode toggle", "GitHub mode: publish")).To(Succeed())
+		publish := session.Screen()
+		Expect(session.Slash(ctx, "/gh-mode browse", "GitHub mode: browse")).To(Succeed())
+		Expect(session.Slash(ctx, "/gh-mode local", "GitHub mode: local")).To(Succeed())
+		Expect(session.Slash(ctx, "/reload", "Reloaded keybindings")).To(Succeed())
+		Expect(session.Slash(ctx, "/gh-mode status", "GitHub mode: local")).To(Succeed())
+		reloaded := session.Screen()
+		Expect(session.Resize(30, 80)).To(Succeed())
+		narrow := session.Screen()
+
+		// then
+		Expect(local).To(ContainSubstring("local ·  rw ·  rw ·  ro ·  rw"))
+		Expect(publish).To(ContainSubstring("publish ·  rw ·  rw ·  rw ·  rw"))
+		Expect(reloaded).To(ContainSubstring("local ·  rw ·  rw ·  ro ·  rw"))
+		Expect(narrow).To(MatchRegexp(`(?m)^no-model-guard local ·  rw`))
+		Expect(session.Quit(ctx)).To(Succeed())
+	})
+})
+
 var _ = Describe("interactive routing and capture", func() {
 	DescribeTable("routes explicit ! and !! through the production sandbox",
 		func(ctx SpecContext, mode, prefix, writability string) {

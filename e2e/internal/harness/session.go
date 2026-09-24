@@ -102,6 +102,14 @@ func withEnv(env []string, key, value string) []string {
 	return append(out, prefix+value)
 }
 
+// Resize changes both the PTY and the screen emulator for footer layout checks.
+func (s *Session) Resize(cols, rows int) error {
+	s.term.mu.Lock()
+	s.term.vt.Resize(cols, rows)
+	s.term.mu.Unlock()
+	return pty.Setsize(s.pty, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
+}
+
 func (s *Session) Invocation() string     { return ShellJoin(s.cmd.Args...) }
 func (s *Session) Screen() string         { return Redact(s.term.Screen()) }
 func (s *Session) Elapsed() time.Duration { return time.Since(s.started) }

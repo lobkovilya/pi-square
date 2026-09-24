@@ -31,6 +31,49 @@ Alt+Super+G to cycle modes.
 | `local`   | writable  | HTTPS; gateway-authenticated GitHub REST GET/HEAD and GraphQL queries |
 | `publish` | writable  | HTTPS; adds gateway-authenticated REST writes and GraphQL mutations   |
 
+The footer summarizes the mode for **new** commands, in Workdir · Local Git ·
+GitHub API · Net order:
+
+```text
+browse ·  ro ·  ro ·  ro ·  rw
+local ·  rw ·  rw ·  ro ·  rw
+publish ·  rw ·  rw ·  rw ·  rw
+```
+
+| Mode | Workdir | Local Git | GitHub API | Net |
+|------|---------|-----------|------------|-----|
+| `browse` | RO | RO | RO | RW |
+| `local` | RW | RW | RO | RW |
+| `publish` | RW | RW | RW | RW |
+
+The icons are Nerd Font folder (``), Git branch (``), GitHub (``),
+and globe (``); they require a Nerd Font terminal. `/gh-mode` or
+`/gh-mode status` gives named, font-independent explanations. A plain-text
+rendering of the browse row is `workdir:ro · git:ro · gh-api:ro · net:rw`.
+OFF means no access, RO means read-only within the stated scope, and RW means
+reads and writes within that scope, **not** unrestricted access. No current
+mode has an OFF resource or a separate resource toggle.
+
+Workdir means the exposed project directory, not the entire host filesystem;
+system mounts, private temporary directories, and pi state exceptions are
+unchanged. Local Git follows Workdir access for repository changes there:
+there is no independent Git gate. Remote Git operations also depend on the
+network and destination policy; external Git directories and worktrees are
+not necessarily protected by a dedicated metadata mechanism.
+
+The GitHub icon means **gateway-authenticated `api.github.com` REST/GraphQL**,
+not GitHub-wide read-only access. RO allows approved REST GET/HEAD and GraphQL
+queries; RW also allows approved REST writes and GraphQL mutations. Other
+GitHub hosts use raw HTTPS tunnels, and HTTPS Git pushes are not governed by
+this API indicator. Independently available credentials are outside the
+gateway-credential guarantee.
+
+Net means other public HTTPS traffic through the mandatory gateway, including
+non-API GitHub hosts. RW allows requests beyond reads, not arbitrary network
+access. The indicators overlap (Git uses files; GitHub uses networking); they
+summarize mode effects, not independently selectable grants. They describe
+sandboxed commands, not pi's provider connection or in-process extensions.
+
 GitHub authentication is not the read boundary. The gateway enforces which
 operations may use its credential before forwarding them upstream, so a
 read-only mode cannot use that credential for writes regardless of its scopes.

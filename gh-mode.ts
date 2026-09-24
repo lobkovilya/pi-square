@@ -10,6 +10,26 @@ const STATUS_KEY = "gh-mode";
 const GITHUB_ICON = "";
 const DENY_WRITE = "write_requires_publish";
 
+type Access = "off" | "ro" | "rw";
+type Resource = "workdir" | "git" | "githubAPI" | "net";
+
+// Presentation only: these values describe the existing overlapping mode gates.
+const RESOURCES: { key: Resource; icon: string; label: string }[] = [
+	{ key: "workdir", icon: "", label: "Workdir" },
+	{ key: "git", icon: "", label: "Local Git" },
+	{ key: "githubAPI", icon: "", label: "GitHub API" },
+	{ key: "net", icon: "", label: "Net" },
+];
+const MODE_ACCESS: Record<GhMode, Record<Resource, Access>> = {
+	browse: { workdir: "ro", git: "ro", githubAPI: "ro", net: "rw" },
+	local: { workdir: "rw", git: "rw", githubAPI: "ro", net: "rw" },
+	publish: { workdir: "rw", git: "rw", githubAPI: "rw", net: "rw" },
+};
+
+function namedAccess(mode: GhMode): string {
+	return RESOURCES.map(({ key, label }) => `${label}: ${MODE_ACCESS[mode][key].toUpperCase()}`).join(" · ");
+}
+
 // Restore browse or local from the session, but never silently re-enter
 // publish: a resumed session starts read-only and the user re-enables writes
 // deliberately.
@@ -93,14 +113,15 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 
 	function updateStatus(ctx: ExtensionContext): void {
 		const color = mode === "browse" ? "success" : mode === "local" ? "accent" : "warning";
-		ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg(color, mode));
+		const row = RESOURCES.map(({ key, icon }) => `${icon} ${MODE_ACCESS[mode][key]}`);
+		ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg(color, [mode, ...row].join(" · ")));
 	}
 
 	function setMode(next: GhMode, ctx: ExtensionContext, notify = true): void {
 		mode = next;
 		updateStatus(ctx);
 		persistMode();
-		if (notify) ctx.ui.notify(`${GITHUB_ICON} GitHub mode: ${mode}`, "info");
+		if (notify) ctx.ui.notify(`${GITHUB_ICON} GitHub mode: ${mode}\n${namedAccess(mode)}`, "info");
 	}
 
 	function modeIncludes(current: GhMode, required: GhMode): boolean {
@@ -188,7 +209,7 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 			const arg = args.trim().toLowerCase();
 			if (!arg || arg === "status") {
 				updateStatus(ctx);
-				ctx.ui.notify(`${GITHUB_ICON} GitHub mode: ${mode}\nShell commands can reach public HTTPS destinations on port 443 through the gateway; only api.github.com receives the gateway credential.`, "info");
+				ctx.ui.notify(`${GITHUB_ICON} GitHub mode: ${mode}\n${namedAccess(mode)}\nGit follows workdir access. GitHub API RO covers gateway-authenticated REST GET/HEAD and GraphQL queries only; RW adds approved writes and mutations.\nNet permits other public HTTPS traffic on port 443 through the gateway, not arbitrary networking.\nMode changes affect newly launched commands; running commands keep their permissions.`, "info");
 				return;
 			}
 			if (arg === "browse" || arg === "local" || arg === "publish") return setMode(arg, ctx);
