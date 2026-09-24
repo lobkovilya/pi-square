@@ -132,7 +132,8 @@ test("commands reach nothing but the gateway, which accepts only public HTTPS CO
     assert.match(values.get("DIRECT") ?? "", /^exit 6: curl: \(6\) Could not resolve host/);
     assert.equal(values.get("PLAIN_HTTP"), "exit 0: only CONNECT is supported");
     for (const label of ["PRIVATE", "LOOPBACK", "OTHER_PORT", "API_PORT"]) {
-      assert.match(values.get(label) ?? "", /^exit 7: curl: \(7\) CONNECT tunnel failed, response 403$/, label);
+      // curl versions report a rejected CONNECT as either connect or receive failure.
+      assert.match(values.get(label) ?? "", /^exit (7|56): curl: \(\1\) CONNECT tunnel failed, response 403$/, label);
     }
   });
 });

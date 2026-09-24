@@ -64,6 +64,16 @@ These still require pi and production sandbox prerequisites, and take about fift
 
 Everything in `npm test` is decided inside the gateway, so no request leaves the machine.
 
+## CI
+
+`.github/workflows/ci.yml` runs `npm test` and `npm run live` on pull requests
+and every push to `main`. Live tests use the repository Actions secrets
+`PI_SQUARE_E2E_REPOSITORY` and `PI_SQUARE_E2E_GITHUB_TOKEN` with the fixture
+and permissions described above. PRs without access to secrets (including fork
+and Dependabot PRs) run only the local tests; missing secrets on `main` fail CI.
+The workflow uses `pull_request`, not `pull_request_target`, so untrusted fork
+code is never given the fixture token. CI pins pi to `0.84.4`.
+
 ## Append-only policy
 
 Every scenario uses a UUID. Created issues remain open permanently, including any unexpected issue from a failed denial test. Nothing remotely created by the suite is closed, deleted, or reused. The harness paginates repository issue listings for exact identifier verification rather than relying on GitHub search indexing.
