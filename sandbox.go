@@ -15,7 +15,7 @@ import (
 // commands share: a tmpfs root with a small set of read-only system mounts, a
 // writable workdir, and pi's state. It stops after pivot_root; it does not drop
 // capabilities, because the supervisor keeps running inside this root.
-func setupRestrictedRoot(root, workdir, home, fff, runtimeXDG string) error {
+func setupRestrictedRoot(root, workdir, home, fff, runtimeXDG, ingressDir string) error {
 	if err := unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""); err != nil {
 		return fmt.Errorf("make mounts private: %w", err)
 	}
@@ -46,6 +46,12 @@ func setupRestrictedRoot(root, workdir, home, fff, runtimeXDG string) error {
 	}
 	if err := writeExtension(root); err != nil {
 		return err
+	}
+	if ingressDir == "" {
+		return fmt.Errorf("missing gateway ingress directory")
+	}
+	if err := bind(root, ingressDir, gatewayDir, true, false); err != nil {
+		return fmt.Errorf("mount gateway ingress: %w", err)
 	}
 	self, err := os.Executable()
 	if err != nil {

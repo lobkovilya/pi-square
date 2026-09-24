@@ -51,9 +51,9 @@ func TestIntegration(t *testing.T) {
 		wantSubstr string
 		wantAbsent string
 	}{
-		{"browse rest read", "browse", "gh api rate_limit -q .rate.limit", "gateway class=ro method=GET path=/rate_limit result=allow", ""},
+		{"browse rest read", "browse", "gh api rate_limit -q .rate.limit && echo RATE_OK", "RATE_OK", ""},
 		{"browse rest write denied", "browse", "gh api -X POST /user/repos -f name=x 2>&1; true", "write_requires_publish", ""},
-		{"browse graphql query", "browse", `gh api graphql -f query='query{viewer{login}}' -q .data.viewer.login`, "gateway class=ro method=POST path=/graphql result=allow", ""},
+		{"browse graphql query", "browse", `gh api graphql -f query='query{viewer{login}}' -q .data.viewer.login && echo QUERY_OK`, "QUERY_OK", ""},
 		{"browse graphql mutation denied", "browse", `gh api graphql -f query='mutation{__typename}' 2>&1; true`, "write_requires_publish", ""},
 		{"publish graphql mutation allowed", "publish", `gh api graphql -f query='mutation{__typename}' -q .data.__typename`, "Mutation", "write_requires_publish"},
 		{"browse non-github passthrough", "browse", `curl -s -m 10 https://example.com >/dev/null && echo REACHED || echo BLOCKED`, "REACHED", "BLOCKED"},

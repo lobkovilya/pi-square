@@ -8,6 +8,7 @@ import "strings"
 // re-executes itself; none of them is an authorization on its own.
 const (
 	stageMarker       = "--pi-square-stage"
+	gatewayMarker     = "--pi-square-gateway-daemon"
 	netnsWorkerMarker = "--pi-square-netns-worker"
 	commandMarker     = "--pi-square-command"
 	stubMarker        = "--pi-square-stub"
