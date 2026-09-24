@@ -25,46 +25,57 @@ func lines(output []byte) map[string]string {
 
 var _ = Describe("sandbox permissions and isolation", func() {
 	It("defaults to browse when --gh-mode is absent", func(ctx SpecContext) {
+		// given
 		opts, err := sessionOptions("browse")
 		Expect(err).NotTo(HaveOccurred())
 		session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--"), opts)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(session.Close)
+
+		// when
 		result, err := session.Bash(ctx, "!", "if touch probe-file 2>/dev/null; then rm -f probe-file; echo writable; else echo readonly; fi")
+
+		// then
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.Output).To(Equal([]byte("readonly\n")))
 		Expect(session.Quit(ctx)).To(Succeed())
 	})
 
 	It("applies browse, local, publish, and toggle to newly launched ! and !! commands", func(ctx SpecContext) {
+		// given
 		opts, err := sessionOptions("browse")
 		Expect(err).NotTo(HaveOccurred())
 		session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode=browse", "--"), opts)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(session.Close)
+
+		// when
 		browse, err := session.Bash(ctx, "!", "if touch probe-file 2>/dev/null; then rm -f probe-file; echo writable; else echo readonly; fi")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(browse.Output).To(Equal([]byte("readonly\n")))
 		Expect(session.Slash(ctx, "/gh-mode local", "GitHub mode: local")).To(Succeed())
 		local, err := session.Bash(ctx, "!!", "if touch probe-file 2>/dev/null; then rm -f probe-file; echo writable; else echo readonly; fi")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(local.Output).To(Equal([]byte("writable\n")))
 		Expect(session.Slash(ctx, "/gh-mode browse", "GitHub mode: browse")).To(Succeed())
 		browseAgain, err := session.Bash(ctx, "!", "if touch probe-file 2>/dev/null; then rm -f probe-file; echo writable; else echo readonly; fi")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(browseAgain.Output).To(Equal([]byte("readonly\n")))
 		Expect(session.Slash(ctx, "/gh-mode publish", "GitHub mode: publish")).To(Succeed())
 		publish, err := session.Bash(ctx, "!!", "if touch probe-file 2>/dev/null; then rm -f probe-file; echo writable; else echo readonly; fi")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(publish.Output).To(Equal([]byte("writable\n")))
 		Expect(session.Slash(ctx, "/gh-mode toggle", "GitHub mode: browse")).To(Succeed())
 		toggled, err := session.Bash(ctx, "!", "if touch probe-file 2>/dev/null; then rm -f probe-file; echo writable; else echo readonly; fi")
 		Expect(err).NotTo(HaveOccurred())
+
+		// then
+		Expect(browse.Output).To(Equal([]byte("readonly\n")))
+		Expect(local.Output).To(Equal([]byte("writable\n")))
+		Expect(browseAgain.Output).To(Equal([]byte("readonly\n")))
+		Expect(publish.Output).To(Equal([]byte("writable\n")))
 		Expect(toggled.Output).To(Equal([]byte("readonly\n")))
 		Expect(session.Quit(ctx)).To(Succeed())
 	})
 
 	It("keeps launch-time permissions for a running command", func(ctx SpecContext) {
+		// given
 		release := "e2e-release"
 		_ = os.Remove(fixture.Workdir + "/" + release)
 		DeferCleanup(os.Remove, fixture.Workdir+"/"+release)
@@ -73,18 +84,23 @@ var _ = Describe("sandbox permissions and isolation", func() {
 		session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode=browse", "--"), opts)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(session.Close)
+
+		// when
 		running, err := session.StartBash(ctx, "!", "while [ ! -e "+harness.ShellJoin(release)+" ]; do sleep .05; done; if touch probe-file 2>/dev/null; then rm -f probe-file; echo writable; else echo readonly; fi")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(session.Slash(ctx, "/gh-mode local", "GitHub mode: local")).To(Succeed())
-		Expect(running.Completed()).To(BeFalse(), "the mode switch must land while the browse command is running")
+		completedBeforeRelease := running.Completed()
 		// Host-side release is mechanics, not an action under test; pi accepts only
 		// one interactive shell command at a time. The read-only mount observes it.
 		Expect(os.WriteFile(fixture.Workdir+"/"+release, []byte("release\n"), 0600)).To(Succeed())
 		old, err := running.Wait(ctx)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(old.Output).To(Equal([]byte("readonly\n")))
 		newResult, err := session.Bash(ctx, "!", "if touch probe-file 2>/dev/null; then rm -f probe-file; echo writable; else echo readonly; fi")
 		Expect(err).NotTo(HaveOccurred())
+
+		// then
+		Expect(completedBeforeRelease).To(BeFalse(), "the mode switch must land while the browse command is running")
+		Expect(old.Output).To(Equal([]byte("readonly\n")))
 		Expect(newResult.Output).To(Equal([]byte("writable\n")))
 		Expect(session.Quit(ctx)).To(Succeed())
 	})
@@ -92,6 +108,7 @@ var _ = Describe("sandbox permissions and isolation", func() {
 	for _, mode := range harness.Modes {
 		mode := mode
 		It(mode+" exposes only the dummy credential and restricted root", func(ctx SpecContext) {
+			// given
 			opts, err := sessionOptions(mode)
 			Expect(err).NotTo(HaveOccurred())
 			session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode="+mode, "--"), opts)
@@ -102,7 +119,11 @@ var _ = Describe("sandbox permissions and isolation", func() {
 				"echo LEAKED_HOST_TOKEN=$(env | grep -c " + harness.ShellJoin(harness.FakeHostToken) + ")", "echo PID1=$(cat /proc/1/comm)",
 				"echo CONTROL_SOCKET=$(test -S /run/pi-square/control.sock && echo reachable || echo hidden)", "echo GATEWAY_DIR=$(ls /run/pi-square/gateway >/dev/null 2>&1 && echo readable || echo masked)",
 				"echo HOST_TMP=$(test -e " + harness.ShellJoin(fixture.HostSecret) + " && echo visible || echo hidden)", "echo WORKDIR=$(test -d " + harness.ShellJoin(fixture.Workdir) + " && echo visible || echo hidden)"}, "; ")
+
+			// when
 			r, err := session.Bash(ctx, "!", probe)
+
+			// then
 			Expect(err).NotTo(HaveOccurred())
 			Expect(r.Status).To(Equal(0))
 			v := lines(r.Output)
@@ -127,51 +148,62 @@ var _ = Describe("sandbox permissions and isolation", func() {
 	for _, mode := range []string{"browse", "local"} {
 		mode := mode
 		It(mode+" denies REST writes and GraphQL mutations without escalation", func(ctx SpecContext) {
+			// given
 			opts, err := sessionOptions(mode)
 			Expect(err).NotTo(HaveOccurred())
 			session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode="+mode, "--"), opts)
 			Expect(err).NotTo(HaveOccurred())
 			DeferCleanup(session.Close)
-			rest, err := session.Bash(ctx, "!", "curl -sS -D - -X POST -H 'Content-Type: application/json' -d '{}' https://api.github.com/user/repos -w '\\nHTTP_CODE=%{http_code}\\n'")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(rest.Status).To(Equal(0))
-			text := string(rest.Output)
-			Expect(text).To(MatchRegexp(`(?m)^HTTP/1\.1 403 `))
-			Expect(text).To(MatchRegexp(`(?m)^X-Pi-Square-Denial: write_requires_publish\r?$`))
-			Expect(text).To(MatchRegexp(`(?m)^HTTP_CODE=403$`))
 			var body struct {
 				Message string                         `json:"message"`
 				Error   struct{ Code, Message string } `json:"error"`
 			}
+
+			// when
+			rest, err := session.Bash(ctx, "!", "curl -sS -D - -X POST -H 'Content-Type: application/json' -d '{}' https://api.github.com/user/repos -w '\\nHTTP_CODE=%{http_code}\\n'")
+			Expect(err).NotTo(HaveOccurred())
+			text := string(rest.Output)
 			for _, line := range strings.Split(text, "\n") {
 				if strings.HasPrefix(line, "{") {
 					Expect(json.Unmarshal([]byte(line), &body)).To(Succeed())
 				}
 			}
-			Expect(body.Error.Code).To(Equal("write_requires_publish"))
-			Expect(body.Message).To(Equal("write_requires_publish: " + body.Error.Message))
 			mutation, err := session.Bash(ctx, "!", "GH_NO_UPDATE_NOTIFIER=1 gh api graphql -f query='mutation{__typename}'")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(mutation.Status).To(Equal(1))
-			Expect(mutation.Output).To(MatchRegexp(`gh: write_requires_publish: GraphQL mutations require publish mode \(HTTP 403\)`))
 			post, err := session.Bash(ctx, "!", "GH_NO_UPDATE_NOTIFIER=1 gh api -X POST /user/repos -f name=x")
 			Expect(err).NotTo(HaveOccurred())
+			screen := session.Screen()
+
+			// then
+			Expect(rest.Status).To(Equal(0))
+			Expect(text).To(MatchRegexp(`(?m)^HTTP/1\.1 403 `))
+			Expect(text).To(MatchRegexp(`(?m)^X-Pi-Square-Denial: write_requires_publish\r?$`))
+			Expect(text).To(MatchRegexp(`(?m)^HTTP_CODE=403$`))
+			Expect(body.Error.Code).To(Equal("write_requires_publish"))
+			Expect(body.Message).To(Equal("write_requires_publish: " + body.Error.Message))
+			Expect(mutation.Status).To(Equal(1))
+			Expect(mutation.Output).To(MatchRegexp(`gh: write_requires_publish: GraphQL mutations require publish mode \(HTTP 403\)`))
 			Expect(post.Status).To(Equal(1))
 			Expect(post.Output).To(MatchRegexp(`gh: write_requires_publish: POST is a write and requires publish mode \(HTTP 403\)`))
-			Expect(session.Screen()).NotTo(ContainSubstring("Switch mode to publish"))
+			Expect(screen).NotTo(ContainSubstring("Switch mode to publish"))
 			Expect(session.Slash(ctx, "/gh-mode status", "GitHub mode: "+mode)).To(Succeed())
 			Expect(session.Quit(ctx)).To(Succeed())
 		})
 	}
 
 	It("blocks proxy bypass, plain HTTP, private destinations, and non-443 ports", func(ctx SpecContext) {
+		// given
 		opts, err := sessionOptions("browse")
 		Expect(err).NotTo(HaveOccurred())
 		session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode=browse", "--"), opts)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(session.Close)
 		probe := strings.Join([]string{`probe() { local label=$1; shift; local out; out=$("$@" 2>&1); printf '%s=exit %s: %s\n' "$label" "$?" "$out"; }`, `probe DIRECT curl -sS -m 5 --noproxy '*' https://api.github.com/`, `probe PLAIN_HTTP curl -sS -m 5 http://example.com/`, `probe PRIVATE curl -sS -m 5 https://10.0.0.1/`, `probe LOOPBACK curl -sS -m 5 https://127.0.0.1/`, `probe OTHER_PORT curl -sS -m 5 https://example.com:8443/`, `probe API_PORT curl -sS -m 5 https://api.github.com:8443/`}, "; ")
+
+		// when
 		r, err := session.Bash(ctx, "!", probe)
+
+		// then
 		Expect(err).NotTo(HaveOccurred())
 		Expect(r.Status).To(Equal(0))
 		v := lines(r.Output)

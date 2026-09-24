@@ -32,6 +32,7 @@ var _ = Describe("live gateway smoke tests", Label("live"), Ordered, func() {
 	}{{"browse", false}, {"local", false}, {"publish", true}} {
 		tc := tc
 		It("runs gh issue create in "+tc.mode+" mode", func(ctx SpecContext) {
+			// given
 			id := unique("pi-square-e2e-issue-" + tc.mode + "-")
 			title := "[" + id + "] live gateway smoke test"
 			body := "Append-only live test artifact. Identifier: " + id + ". Mode: " + tc.mode + "."
@@ -46,7 +47,11 @@ var _ = Describe("live gateway smoke tests", Label("live"), Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 			DeferCleanup(session.Close)
 			command := harness.ShellJoin("gh", "issue", "create", "--repo", liveFixture.Repository, "--title", title, "--body", body)
+
+			// when
 			result, err := session.Bash(ctx, "!", command)
+
+			// then
 			Expect(err).NotTo(HaveOccurred())
 			diagnostic := harness.FormatResult(result)
 			if !tc.allowed {
@@ -81,6 +86,7 @@ var _ = Describe("live gateway smoke tests", Label("live"), Ordered, func() {
 	for _, mode := range []string{"browse", "local", "publish"} {
 		mode := mode
 		It("runs curl to public HTTPS in "+mode+" mode", func(ctx SpecContext) {
+			// given
 			id := unique("pi-square-e2e-http-" + mode + "-")
 			target := "https://httpbin.org/get?pi_square_id=" + url.QueryEscape(id)
 			opts, err := sessionOptions(mode)
@@ -89,7 +95,11 @@ var _ = Describe("live gateway smoke tests", Label("live"), Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 			DeferCleanup(session.Close)
 			command := harness.ShellJoin("curl", "--connect-timeout", "10", "--max-time", "30", "--fail-with-body", "--silent", "--show-error", target, "--write-out", "\n__PI_SQUARE_HTTP_STATUS__:%{http_code}\n")
+
+			// when
 			result, err := session.Bash(ctx, "!", command)
+
+			// then
 			Expect(err).NotTo(HaveOccurred())
 			diagnostic := harness.FormatResult(result)
 			Expect(result.Status).To(Equal(0), diagnostic)
