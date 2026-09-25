@@ -169,7 +169,7 @@ func TestForwardReplacesCredentialAndStripsHeaders(t *testing.T) {
 	if got := rec.lastReq.Header.Get("Accept"); got != "application/vnd.github+json" {
 		t.Errorf("Accept should be preserved, got %q", got)
 	}
-	sanitizeResponseHeaders(resp.Header)
+	sanitizeResponseHeaders(resp.Header, true)
 	if got := resp.Header.Get("Set-Cookie"); got != "" {
 		t.Errorf("response Set-Cookie should be stripped, got %q", got)
 	}
@@ -343,27 +343,35 @@ func TestLeafRenewsBeforeExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	same, err := gw.currentLeaf(now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if same.Leaf.SerialNumber.Cmp(gw.leaf.Leaf.SerialNumber) != 0 {
-		t.Fatal("fresh leaf was replaced")
-	}
-	first := same.Leaf.SerialNumber
-	later := now.Add(leafValidity - leafRenewal + time.Minute)
-	renewed, err := gw.currentLeaf(later)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if renewed.Leaf.SerialNumber.Cmp(first) == 0 {
-		t.Fatal("leaf was not renewed ahead of expiry")
-	}
-	if !later.Before(renewed.Leaf.NotAfter) || !renewed.Leaf.NotBefore.Before(later) {
-		t.Fatalf("renewed leaf validity %v-%v does not cover %v", renewed.Leaf.NotBefore, renewed.Leaf.NotAfter, later)
-	}
-	if err := renewed.Leaf.CheckSignatureFrom(ca.cert); err != nil {
-		t.Fatalf("renewed leaf is not signed by the instance CA: %v", err)
+	for _, host := range []string{permittedHost, gitHost} {
+		t.Run(host, func(t *testing.T) {
+			same, err := gw.currentLeaf(host, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			original := gw.leaves[host]
+			if same.Leaf.SerialNumber.Cmp(original.Leaf.SerialNumber) != 0 {
+				t.Fatal("fresh leaf was replaced")
+			}
+			first := same.Leaf.SerialNumber
+			later := now.Add(leafValidity - leafRenewal + time.Minute)
+			renewed, err := gw.currentLeaf(host, later)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if renewed.Leaf.SerialNumber.Cmp(first) == 0 {
+				t.Fatal("leaf was not renewed ahead of expiry")
+			}
+			if renewed.Leaf.DNSNames[0] != host {
+				t.Fatalf("leaf DNS name = %q, want %q", renewed.Leaf.DNSNames[0], host)
+			}
+			if !later.Before(renewed.Leaf.NotAfter) || !renewed.Leaf.NotBefore.Before(later) {
+				t.Fatalf("renewed leaf validity %v-%v does not cover %v", renewed.Leaf.NotBefore, renewed.Leaf.NotAfter, later)
+			}
+			if err := renewed.Leaf.CheckSignatureFrom(ca.cert); err != nil {
+				t.Fatalf("renewed leaf is not signed by the instance CA: %v", err)
+			}
+		})
 	}
 }
 

@@ -27,9 +27,9 @@ Alt+Super+G to cycle modes.
 
 | Mode      | Workdir   | Shell network                                                       |
 |-----------|-----------|---------------------------------------------------------------------|
-| `browse`  | read-only | HTTPS; gateway-authenticated GitHub REST GET/HEAD and GraphQL queries |
-| `local`   | writable  | HTTPS; gateway-authenticated GitHub REST GET/HEAD and GraphQL queries |
-| `publish` | writable  | HTTPS; adds gateway-authenticated REST writes and GraphQL mutations   |
+| `browse`  | read-only | HTTPS; gateway-authenticated GitHub API reads and Git fetches |
+| `local`   | writable  | HTTPS; gateway-authenticated GitHub API reads and Git fetches |
+| `publish` | writable  | HTTPS; adds gateway-authenticated API writes and Git pushes |
 
 The footer summarizes the mode for **new** commands, in Workdir · Local Git ·
 GitHub API · Net order:
@@ -61,11 +61,12 @@ there is no independent Git gate. Remote Git operations also depend on the
 network and destination policy; external Git directories and worktrees are
 not necessarily protected by a dedicated metadata mechanism.
 
-The GitHub icon means **gateway-authenticated `api.github.com` REST/GraphQL**,
-not GitHub-wide read-only access. RO allows approved REST GET/HEAD and GraphQL
-queries; RW also allows approved REST writes and GraphQL mutations. Other
-GitHub hosts use raw HTTPS tunnels, and HTTPS Git pushes are not governed by
-this API indicator. Independently available credentials are outside the
+The GitHub icon means **gateway-authenticated GitHub API and smart HTTP Git**,
+not GitHub-wide read-only access. RO allows approved REST GET/HEAD, GraphQL
+queries, and HTTPS Git fetches. RW also allows approved REST writes, GraphQL
+mutations, and HTTPS Git pushes. Other paths on `github.com` receive no gateway
+credential, but client-supplied credentials pass through; other GitHub hosts use
+raw HTTPS tunnels. Independently available credentials are outside the
 gateway-credential guarantee.
 
 Net means other public HTTPS traffic through the mandatory gateway, including
@@ -81,9 +82,16 @@ This guarantee does not cover credentials independently available to a command.
 
 HTTPS on port 443 is reachable only through the gateway. For
 `api.github.com:443`, the gateway intercepts TLS and applies the REST/GraphQL
-policy above. Connections to other public destinations—including other GitHub
-hosts and external relays—are end-to-end TLS tunnels: the gateway neither
-inspects traffic nor injects its credential.
+policy above. It also intercepts `github.com:443`, authenticating only strict
+Git smart HTTP fetch/push endpoints with the gateway credential and forwarding
+all other paths with any client-supplied credentials unchanged. Because both
+intercepted hosts use the gateway's private CA, clients must trust
+`/run/pi-square/ca-bundle.crt`; the wrapper exports common TLS variables,
+including `SSL_CERT_FILE`, `GIT_SSL_CAINFO`, and `DENO_CERT`, but tools that
+ignore them need explicit CA configuration. Connections to other public
+destinations—including other GitHub hosts and
+external relays—are end-to-end TLS tunnels: the gateway neither inspects
+traffic nor injects its credential.
 Private, loopback, link-local, and other non-public destinations are rejected.
 Plain HTTP, SSH, and other destination ports are unsupported. Direct
 connections, alternative proxies, and proxy bypass do not work; a command that
@@ -129,14 +137,18 @@ it: restart the instance after changing `gh` authentication. The credential is
 held only in the gateway's memory; it is never written to disk, logged, or
 passed into pi or any command. Each instance also holds its private CA key in
 memory; supervisors receive only its public certificate, and restarting rotates
-that CA. The `api.github.com` leaf certificate is short-lived and renewed by
-the instance itself, so a long-running instance never serves an expired one.
+that CA. The `api.github.com` and `github.com` leaf certificates are short-lived
+and renewed by the instance itself, so a long-running instance never serves an
+expired one.
 
 For every approved request the gateway strips any client-supplied
 authorization, cookies, and proxy credentials, inserts its own credential, and
-sends the request to the TLS-verified `api.github.com` upstream. Commands
-receive a dummy `GH_TOKEN` so `gh` and `curl` construct authenticated calls;
-the gateway replaces it.
+sends the request to the TLS-verified upstream. API requests use bearer
+authentication; recognized Git smart HTTP endpoints use GitHub's
+`x-access-token` basic authentication. Commands receive a dummy `GH_TOKEN` so
+`gh` and `curl` construct authenticated API calls; the gateway replaces it.
+The real token remains only in gateway memory and no Git credential helper is
+needed inside the sandbox.
 
 ## Build
 
@@ -161,7 +173,7 @@ go test ./...
 go test -tags=e2e ./e2e -count=1 -timeout=15m -args -ginkgo.label-filter='!live'
 ```
 
-The tagged Ginkgo suite drives real interactive pi through a Go PTY and the production sandbox. It defaults to local-only tests and needs no npm test harness. The separately authorized six-case live suite, fixture setup, credential policy, and diagnostics are documented in [`e2e/README.md`](e2e/README.md).
+The tagged Ginkgo suite drives real interactive pi through a Go PTY and the production sandbox. It defaults to local-only tests and needs no npm test harness. The separately authorized seven-case live suite, fixture setup, credential policy, and diagnostics are documented in [`e2e/README.md`](e2e/README.md).
 
 `TestIntegration` drives read-only commands through the real sandbox and gateway to GitHub.com using the host `gh` credential. It is opt-in, uses a temporary gateway instance, and stops it afterwards:
 
@@ -219,11 +231,14 @@ project directory.
 - Network isolation applies to commands, not to pi itself or to in-process
   custom tools. Audit or disable any custom tool that performs its own network
   I/O; do not assume all pi traffic is isolated.
-- Only `api.github.com` REST and GraphQL receive the gateway credential and
-  policy enforcement. Other public HTTPS destinations are raw tunnels. Git
-  operations that need SSH or non-HTTPS ports remain unsupported; HTTPS Git,
-  LFS, registries, assets, raw-content hosts, and GitHub Enterprise may be
-  reachable but receive no gateway-injected authentication.
+- Only `api.github.com` REST/GraphQL and recognized `github.com` Git smart HTTP
+  fetch/push endpoints receive the gateway credential and policy enforcement.
+  Other `github.com` paths receive no gateway-injected authentication, but
+  client credentials pass through; other public HTTPS destinations are raw
+  tunnels. SSH Git, LFS, registries, authenticated release assets, raw-content
+  hosts, and GitHub Enterprise receive no gateway-injected authentication;
+  non-HTTPS ports remain unsupported. Tools accessing intercepted hosts must
+  trust `/run/pi-square/ca-bundle.crt` and may need tool-specific CA settings.
 - pi's own credentials under `~/.pi` are readable by the agent, because pi
   needs them. Anything else the agent must not see has to stay out of `~/.pi`,
   the project directory, and the read-only configuration files listed above.

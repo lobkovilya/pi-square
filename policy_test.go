@@ -38,17 +38,39 @@ func TestIsGraphQLPath(t *testing.T) {
 }
 
 func TestHostMatches(t *testing.T) {
-	yes := []string{"api.github.com", "api.github.com:443", "API.GitHub.com"}
-	no := []string{"github.com", "api.github.com:80", "api.github.com.evil.com", "evil.com:443", "[::1]:443"}
-	for _, h := range yes {
-		if !hostMatches(h) {
-			t.Errorf("hostMatches(%q) = false, want true", h)
+	for _, tc := range []struct {
+		authority string
+		host      string
+		want      bool
+	}{
+		{"api.github.com", permittedHost, true},
+		{"api.github.com:443", permittedHost, true},
+		{"API.GitHub.com", permittedHost, true},
+		{"github.com", gitHost, true},
+		{"github.com:443", gitHost, true},
+		{"github.com", permittedHost, false},
+		{"api.github.com:80", permittedHost, false},
+		{"api.github.com.evil.com", permittedHost, false},
+		{"evil.com:443", gitHost, false},
+		{"[::1]:443", gitHost, false},
+	} {
+		if got := hostMatches(tc.authority, tc.host); got != tc.want {
+			t.Errorf("hostMatches(%q, %q) = %v, want %v", tc.authority, tc.host, got, tc.want)
 		}
 	}
-	for _, h := range no {
-		if hostMatches(h) {
-			t.Errorf("hostMatches(%q) = true, want false", h)
+}
+
+func TestAuthorizeGit(t *testing.T) {
+	for _, class := range []policyClass{classRO, classW} {
+		if deny := authorizeGit(class, gitUploadPack); deny != nil {
+			t.Errorf("%s upload-pack denied: %v", class, deny)
 		}
+	}
+	if deny := authorizeGit(classRO, gitReceivePack); deny == nil || deny.code != denyWriteRequiresPublish {
+		t.Errorf("RO receive-pack should require publish, got %v", deny)
+	}
+	if deny := authorizeGit(classW, gitReceivePack); deny != nil {
+		t.Errorf("W receive-pack denied: %v", deny)
 	}
 }
 

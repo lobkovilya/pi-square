@@ -314,7 +314,7 @@ func (s *supervisor) commandEnv(home string) []string {
 	for _, key := range []string{"NO_PROXY", "no_proxy"} {
 		env = setEnv(env, key, "")
 	}
-	for _, key := range []string{"SSL_CERT_FILE", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE"} {
+	for _, key := range []string{"SSL_CERT_FILE", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "DENO_CERT"} {
 		env = setEnv(env, key, caBundlePath)
 	}
 	env = unsetEnv(env, "SSL_CERT_DIR")
