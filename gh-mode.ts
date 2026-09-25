@@ -7,28 +7,23 @@ type GhMode = "browse" | "local" | "publish";
 
 const STATE_ENTRY = "gh-mode-state";
 const STATUS_KEY = "gh-mode";
-const GITHUB_ICON = "";
 const DENY_WRITE = "write_requires_publish";
 
 type Access = "off" | "ro" | "rw";
 type Resource = "workdir" | "git" | "githubAPI" | "net";
 
 // Presentation only: these values describe the existing overlapping mode gates.
-const RESOURCES: { key: Resource; icon: string; label: string }[] = [
-	{ key: "workdir", icon: "", label: "Workdir" },
-	{ key: "git", icon: "", label: "Local Git" },
-	{ key: "githubAPI", icon: "", label: "GitHub API" },
-	{ key: "net", icon: "", label: "Net" },
+const RESOURCES: { key: Resource; icon: string }[] = [
+	{ key: "workdir", icon: "" },
+	{ key: "git", icon: "" },
+	{ key: "githubAPI", icon: "" },
+	{ key: "net", icon: "" },
 ];
 const MODE_ACCESS: Record<GhMode, Record<Resource, Access>> = {
 	browse: { workdir: "ro", git: "ro", githubAPI: "ro", net: "rw" },
 	local: { workdir: "rw", git: "rw", githubAPI: "ro", net: "rw" },
 	publish: { workdir: "rw", git: "rw", githubAPI: "rw", net: "rw" },
 };
-
-function namedAccess(mode: GhMode): string {
-	return RESOURCES.map(({ key, label }) => `${label}: ${MODE_ACCESS[mode][key].toUpperCase()}`).join(" · ");
-}
 
 // Restore browse or local from the session, but never silently re-enter
 // publish: a resumed session starts read-only and the user re-enables writes
@@ -120,7 +115,7 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 		mode = next;
 		updateStatus(ctx);
 		persistMode();
-		if (notify) ctx.ui.notify(`${GITHUB_ICON} GitHub mode: ${mode}\n${namedAccess(mode)}`, "info");
+		if (notify) ctx.ui.notify(`pi-square: ${mode}`, "info");
 	}
 
 	function modeIncludes(current: GhMode, required: GhMode): boolean {
@@ -134,7 +129,7 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 
 		const previous = mode;
 		const switchOption = `Switch mode to ${required}`;
-		const choice = await ctx.ui.select(`${GITHUB_ICON} GitHub mode is ${previous}. ${reason}`, [
+		const choice = await ctx.ui.select(`pi-square is ${previous}. ${reason}`, [
 			switchOption,
 			"Keep existing",
 		]);
@@ -175,8 +170,8 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 
 		const changed = await suggestMode("publish", ctx, "A command was denied because it writes to GitHub.");
 		const hint = changed
-			? `${GITHUB_ICON} GitHub mode switched to publish. Launch the command again to perform the write.`
-			: `${GITHUB_ICON} GitHub mode remains ${mode}. Writes require publish mode (/gh-mode publish).`;
+			? "pi-square switched to publish. Launch the command again to perform the write."
+			: `pi-square remains ${mode}. Writes require publish mode (/gh-mode publish).`;
 		return { content: [...event.content, { type: "text" as const, text: hint }] };
 	}
 
@@ -206,7 +201,7 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 			const arg = args.trim().toLowerCase();
 			if (!arg || arg === "status") {
 				updateStatus(ctx);
-				ctx.ui.notify(`${GITHUB_ICON} GitHub mode: ${mode}\n${namedAccess(mode)}\nGit follows workdir access. GitHub API RO covers gateway-authenticated REST GET/HEAD and GraphQL queries only; RW adds approved writes and mutations.\nNet permits other public HTTPS traffic on port 443 through the gateway, not arbitrary networking.\nMode changes affect newly launched commands; running commands keep their permissions.`, "info");
+				ctx.ui.notify(`pi-square: ${mode}`, "info");
 				return;
 			}
 			if (arg === "browse" || arg === "local" || arg === "publish") return setMode(arg, ctx);
