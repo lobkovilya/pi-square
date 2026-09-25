@@ -99,7 +99,7 @@ func run(args []string, devMode bool, initialGHMode, gatewayName string, explici
 	}
 	defer attachmentFile.Close()
 
-	s, err := claimFFF(workdir, home)
+	s, err := claimFFF(workdir)
 	if err != nil {
 		return err
 	}
@@ -135,6 +135,7 @@ func run(args []string, devMode bool, initialGHMode, gatewayName string, explici
 		"PI_SQUARE_HOST_UID":        strconv.Itoa(os.Getuid()),
 		"PI_SQUARE_DEV_MODE":        devModeValue,
 		"PI_SQUARE_INITIAL_GH_MODE": initialGHMode,
+		"PI_SQUARE_GATEWAY_DIR":     paths.dir,
 	} {
 		env = setEnv(env, key, value)
 	}
@@ -148,9 +149,6 @@ func run(args []string, devMode bool, initialGHMode, gatewayName string, explici
 	cmd.Env = env
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	cmd.ExtraFiles = []*os.File{secretsReader, attachmentFile}
-	// The ingress directory is bind-mounted into the trusted supervisor root.
-	env = setEnv(env, "PI_SQUARE_GATEWAY_DIR", paths.dir)
-	cmd.Env = env
 	attr := namespaceAttr(unix.CLONE_NEWUSER | unix.CLONE_NEWNS | unix.CLONE_NEWPID | unix.CLONE_NEWIPC | unix.CLONE_NEWUTS | unix.CLONE_NEWCGROUP)
 	attr.Pdeathsig = syscall.SIGKILL
 	cmd.SysProcAttr = attr
@@ -200,11 +198,11 @@ func namespaceAttr(cloneFlags uintptr) *syscall.SysProcAttr {
 	}
 }
 
-func claimFFF(workdir, home string) (*slot, error) {
+func claimFFF(workdir string) (*slot, error) {
 	sum := sha256.Sum256([]byte(workdir))
-	cache := os.Getenv("XDG_CACHE_HOME")
-	if cache == "" {
-		cache = filepath.Join(home, ".cache")
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		return nil, err
 	}
 	base := filepath.Join(cache, "pi-square", "fff", hex.EncodeToString(sum[:8]))
 	for i := 0; i < 8; i++ {

@@ -25,29 +25,38 @@ const gatewayProtocol = 1
 
 var instanceName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,39}$`)
 
-type instancePaths struct{ dir, lock, management, ro, rw string }
+type instancePaths struct{ dir, lock, log, management, ro, rw string }
 
 func instancePathsAt(dir string) instancePaths {
 	return instancePaths{
 		dir:        dir,
 		lock:       filepath.Join(dir, ".lock"),
+		log:        filepath.Join(dir, "gateway.log"),
 		management: filepath.Join(dir, "control.sock"),
 		ro:         filepath.Join(dir, filepath.Base(roSocket)),
 		rw:         filepath.Join(dir, filepath.Base(wSocket)),
 	}
 }
 
+var errProtocolMismatch = errors.New("gateway protocol mismatch")
+
+// daemonError is a refusal reported by a healthy gateway, as opposed to a
+// connection or handshake failure.
+type daemonError struct{ message string }
+
+func (e *daemonError) Error() string { return e.message }
+
 func pathsFor(name string) (instancePaths, error) {
 	if !instanceName.MatchString(name) {
 		return instancePaths{}, fmt.Errorf("invalid gateway name %q (use 1-40 letters, digits, _ or -)", name)
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return instancePaths{}, err
-	}
 	base := os.Getenv("XDG_RUNTIME_DIR")
 	if base == "" {
-		base = filepath.Join(home, ".cache")
+		cache, err := os.UserCacheDir()
+		if err != nil {
+			return instancePaths{}, err
+		}
+		base = cache
 	}
 	dir := filepath.Join(base, "pi-square", "instances", name)
 	p := instancePathsAt(dir)
@@ -101,11 +110,11 @@ func probeInstance(p instancePaths, op string, force bool) (net.Conn, gatewayMes
 	}
 	if msg.Version != gatewayProtocol {
 		conn.Close()
-		return nil, msg, fmt.Errorf("gateway protocol mismatch: gateway=%d wrapper=%d", msg.Version, gatewayProtocol)
+		return nil, msg, fmt.Errorf("%w: gateway=%d wrapper=%d", errProtocolMismatch, msg.Version, gatewayProtocol)
 	}
 	if msg.Error != "" {
 		conn.Close()
-		return nil, msg, errors.New(msg.Error)
+		return nil, msg, &daemonError{message: msg.Error}
 	}
 	conn.SetDeadline(time.Time{})
 	return conn, msg, nil
@@ -132,7 +141,7 @@ func attachInstance(name string, startDefault bool) (net.Conn, string, instanceP
 	if err == nil {
 		return conn, msg.CA, p, nil
 	}
-	if strings.Contains(err.Error(), "protocol mismatch") {
+	if errors.Is(err, errProtocolMismatch) {
 		return nil, "", p, err
 	}
 	if !startDefault {
@@ -163,7 +172,7 @@ func startInstance(name string) error {
 		conn.Close()
 		return fmt.Errorf("gateway %q is already running", name)
 	}
-	if strings.Contains(err.Error(), "protocol mismatch") {
+	if errors.Is(err, errProtocolMismatch) {
 		return err
 	}
 	return startInstanceLocked(p)
@@ -190,8 +199,15 @@ func startInstanceLocked(p instancePaths) error {
 		return err
 	}
 	defer devnull.Close()
+	logFile, err := os.OpenFile(p.log, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	if err != nil {
+		reader.Close()
+		writer.Close()
+		return err
+	}
+	defer logFile.Close()
 	cmd := exec.Command("/proc/self/exe", gatewayMarker, p.dir)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = devnull, devnull, devnull
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = devnull, devnull, logFile
 	cmd.ExtraFiles = []*os.File{reader}
 	cmd.Env = sanitizeParentEnv(os.Environ())
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -216,7 +232,7 @@ func startInstanceLocked(p instancePaths) error {
 			conn.Close()
 			return nil
 		}
-		if strings.Contains(err.Error(), "protocol mismatch") {
+		if errors.Is(err, errProtocolMismatch) {
 			return err
 		}
 		if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
@@ -239,6 +255,10 @@ func stopInstance(name string, force bool) error {
 	}
 	defer lock.Close()
 	conn, _, err := probeInstance(p, "stop", force)
+	var refused *daemonError
+	if errors.As(err, &refused) {
+		return fmt.Errorf("gateway %q: %w", name, err)
+	}
 	if err != nil {
 		return fmt.Errorf("gateway %q is not healthy: %w", name, err)
 	}
@@ -301,7 +321,7 @@ func runGatewayDaemon(dir string) error {
 	if err != nil {
 		return err
 	}
-	gw, err := newGateway(ca, token, log.New(os.Stderr, "", 0))
+	gw, err := newGateway(ca, token, log.New(os.Stderr, "", log.LstdFlags))
 	if err != nil {
 		return err
 	}
@@ -349,9 +369,9 @@ func runGatewayDaemon(dir string) error {
 				return
 			}
 			mu.Lock()
-			resp := gatewayMessage{Version: gatewayProtocol, Active: active}
+			resp := gatewayMessage{Version: gatewayProtocol}
 			if req.Version != gatewayProtocol {
-				resp.Error = "gateway protocol mismatch"
+				resp.Error = errProtocolMismatch.Error()
 			} else {
 				switch req.Op {
 				case "health":
@@ -360,12 +380,13 @@ func runGatewayDaemon(dir string) error {
 					resp.CA = string(ca.certPEM)
 				case "stop":
 					if active != 0 && !req.Force {
-						resp.Error = fmt.Sprintf("gateway has %d active session(s); use --force", active)
+						resp.Error = fmt.Sprintf("%d active session(s); use --force", active)
 					}
 				default:
 					resp.Error = "unknown gateway operation"
 				}
 			}
+			resp.Active = active
 			json.NewEncoder(conn).Encode(resp)
 			mu.Unlock()
 			if resp.Error != "" {

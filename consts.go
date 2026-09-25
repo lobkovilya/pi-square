@@ -15,12 +15,14 @@ const (
 	piStageMarker     = "--pi-square-pi"
 )
 
-// Inherited file descriptors. The stage receives its secrets on fd 3; the netns
-// worker and command stages receive purpose-specific fds there instead.
+// Inherited file descriptors. The stage receives its secrets on fd 3 and the
+// gateway attachment on fd 4; the netns worker and command stages receive
+// purpose-specific fds on fd 3 instead.
 const (
-	secretsFD = 3
-	readyFD   = 3
-	netnsFD   = 3
+	secretsFD    = 3
+	attachmentFD = 4
+	readyFD      = 3
+	netnsFD      = 3
 )
 
 // Paths materialized inside the restricted root.

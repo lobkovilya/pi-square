@@ -16,6 +16,14 @@ import (
 	"time"
 )
 
+// A gateway instance may run for months, so the CA outlives any realistic
+// instance while leaves are short-lived and renewed by the gateway.
+const (
+	caValidity   = 10 * 365 * 24 * time.Hour
+	leafValidity = 7 * 24 * time.Hour
+	leafRenewal  = 24 * time.Hour
+)
+
 // caMaterial is the gateway's private certificate authority. Its key never
 // leaves the gateway process; only the public certificate is written anywhere a
 // client can read it.
@@ -38,7 +46,7 @@ func newEphemeralCA() (*caMaterial, error) {
 		SerialNumber:          serial,
 		Subject:               pkix.Name{CommonName: "pi-square ephemeral gateway CA"},
 		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(30 * 24 * time.Hour),
+		NotAfter:              time.Now().Add(caValidity),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
@@ -61,7 +69,7 @@ func newEphemeralCA() (*caMaterial, error) {
 
 // leafFor mints a certificate for the permitted host, signed by the ephemeral
 // CA. The gateway presents this after it accepts a CONNECT tunnel.
-func (ca *caMaterial) leafFor(host string) (tls.Certificate, error) {
+func (ca *caMaterial) leafFor(host string, now time.Time) (tls.Certificate, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return tls.Certificate{}, fmt.Errorf("generate leaf key: %w", err)
@@ -73,8 +81,8 @@ func (ca *caMaterial) leafFor(host string) (tls.Certificate, error) {
 	template := &x509.Certificate{
 		SerialNumber: serial,
 		Subject:      pkix.Name{CommonName: host},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(30 * 24 * time.Hour),
+		NotBefore:    now.Add(-time.Hour),
+		NotAfter:     now.Add(leafValidity),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		DNSNames:     []string{host},

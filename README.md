@@ -129,17 +129,14 @@ it: restart the instance after changing `gh` authentication. The credential is
 held only in the gateway's memory; it is never written to disk, logged, or
 passed into pi or any command. Each instance also holds its private CA key in
 memory; supervisors receive only its public certificate, and restarting rotates
-that CA.
+that CA. The `api.github.com` leaf certificate is short-lived and renewed by
+the instance itself, so a long-running instance never serves an expired one.
 
 For every approved request the gateway strips any client-supplied
 authorization, cookies, and proxy credentials, inserts its own credential, and
 sends the request to the TLS-verified `api.github.com` upstream. Commands
 receive a dummy `GH_TOKEN` so `gh` and `curl` construct authenticated calls;
 the gateway replaces it.
-
-The previous read-only/write token file at `~/.pi-square/github-tokens.json`
-is no longer used. `pi-square` does not read or delete it; you can remove it
-manually.
 
 ## Build
 
@@ -165,6 +162,12 @@ go test -tags=e2e ./e2e -count=1 -timeout=15m -args -ginkgo.label-filter='!live'
 ```
 
 The tagged Ginkgo suite drives real interactive pi through a Go PTY and the production sandbox. It defaults to local-only tests and needs no npm test harness. The separately authorized six-case live suite, fixture setup, credential policy, and diagnostics are documented in [`e2e/README.md`](e2e/README.md).
+
+`TestIntegration` drives read-only commands through the real sandbox and gateway to GitHub.com using the host `gh` credential. It is opt-in, uses a temporary gateway instance, and stops it afterwards:
+
+```sh
+PI_SQUARE_INTEGRATION=1 go test -run TestIntegration -v
+```
 
 ## Use
 
@@ -193,9 +196,13 @@ Instances outlive pi-square sessions. `gateway stop` refuses while sessions are
 attached; `--force` stops it even with active sessions and long-running commands
 lose gateway access (there is no direct-network fallback). State and sockets
 live under `$XDG_RUNTIME_DIR/pi-square/instances/` when set, otherwise under
-`~/.cache/pi-square/instances/`; no credentials or CA private keys are stored
-there. Stale sockets do not count as healthy instances. The wrapper and gateway
-must speak the same protocol version; restart an old instance after upgrading.
+`$XDG_CACHE_HOME/pi-square/instances/` (default `~/.cache`); no credentials or
+CA private keys are stored there. Each instance writes its request and tunnel
+log to `gateway.log` in its state directory, truncated when the instance
+starts; log lines carry methods, paths, and destinations, never credentials or
+bodies. Stale sockets do not count as healthy instances. The wrapper and
+gateway must speak the same protocol version; restart an old instance after
+upgrading.
 
 All pi arguments (including prompts) must follow `--`. Running `pi-square`
 without arguments starts pi normally. `--mode=dev` keeps the sandbox and

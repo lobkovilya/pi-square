@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -49,6 +50,7 @@ var hopByHopHeaders = []string{
 // accepted the connection) and never inferred from client bytes.
 type gateway struct {
 	ca           *caMaterial
+	leafMu       sync.Mutex
 	leaf         tls.Certificate
 	token        string
 	client       *http.Client
@@ -63,7 +65,7 @@ type gateway struct {
 }
 
 func newGateway(ca *caMaterial, token string, logger *log.Logger) (*gateway, error) {
-	leaf, err := ca.leafFor(permittedHost)
+	leaf, err := ca.leafFor(permittedHost, time.Now())
 	if err != nil {
 		return nil, err
 	}
@@ -111,9 +113,25 @@ func (g *gateway) tlsConfig() *tls.Config {
 			if hello.ServerName != "" && normalizeHostname(hello.ServerName) != permittedHost {
 				return nil, fmt.Errorf("unexpected SNI %q", hello.ServerName)
 			}
-			return &g.leaf, nil
+			return g.currentLeaf(time.Now())
 		},
 	}
+}
+
+// currentLeaf returns the leaf certificate, renewing it ahead of expiry so a
+// long-running instance keeps serving valid certificates.
+func (g *gateway) currentLeaf(now time.Time) (*tls.Certificate, error) {
+	g.leafMu.Lock()
+	defer g.leafMu.Unlock()
+	if now.Before(g.leaf.Leaf.NotAfter.Add(-leafRenewal)) {
+		return &g.leaf, nil
+	}
+	leaf, err := g.ca.leafFor(permittedHost, now)
+	if err != nil {
+		return nil, err
+	}
+	g.leaf = leaf
+	return &g.leaf, nil
 }
 
 // serveIngress handles one client connection arriving on a class ingress. It
@@ -370,10 +388,9 @@ func (g *gateway) serveTunnel(tlsConn *tls.Conn, class policyClass) {
 		sanitizeResponseHeaders(resp.Header)
 		resp.Close = !keepAlive
 		tlsConn.SetWriteDeadline(time.Now().Add(gatewayResponse))
-		if err := resp.Write(tlsConn); err != nil {
-			return
-		}
-		if !keepAlive {
+		err = resp.Write(tlsConn)
+		resp.Body.Close()
+		if err != nil || !keepAlive {
 			return
 		}
 	}
@@ -416,7 +433,8 @@ func (g *gateway) dispatch(class policyClass, req *http.Request) (*http.Response
 
 // forward builds a fresh upstream request from validated fields rather than
 // replaying decrypted bytes, replaces the credential, and returns the upstream
-// response with its body buffered so framing is unambiguous.
+// response with its body still streaming; the caller relays it to the client
+// and closes it.
 func (g *gateway) forward(class policyClass, req *http.Request, body []byte) (*http.Response, error) {
 	target := *g.upstreamBase
 	target.Path = req.URL.Path
@@ -437,15 +455,13 @@ func (g *gateway) forward(class policyClass, req *http.Request, body []byte) (*h
 	if err != nil {
 		return nil, err
 	}
-	buffered, err := io.ReadAll(io.LimitReader(resp.Body, maxRequestBody+1))
-	resp.Body.Close()
-	if err != nil {
-		return nil, err
+	// The client side of the tunnel is HTTP/1.1 regardless of the upstream
+	// protocol. An unknown length (HTTP/2, or a transparently decompressed
+	// body) must be chunked, otherwise Response.Write emits an undelimited body.
+	resp.Proto, resp.ProtoMajor, resp.ProtoMinor = "HTTP/1.1", 1, 1
+	if resp.ContentLength < 0 {
+		resp.TransferEncoding = []string{"chunked"}
 	}
-	resp.Body = io.NopCloser(bytes.NewReader(buffered))
-	resp.ContentLength = int64(len(buffered))
-	resp.TransferEncoding = nil
-	resp.Uncompressed = false
 	return resp, nil
 }
 
