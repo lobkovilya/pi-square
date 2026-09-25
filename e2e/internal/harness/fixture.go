@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -20,7 +21,7 @@ var Modes = []string{"browse", "local", "publish"}
 
 type Fixture struct {
 	Root, Binary, Workdir, HostHome, HostSecret string
-	buildDir, secretDir                         string
+	buildDir, secretDir, runtimeDir             string
 }
 
 type SessionOptions struct {
@@ -92,15 +93,29 @@ func NewFixture(ctx context.Context) (*Fixture, error) {
 	secret := filepath.Join(secretDir, "host-only-file")
 	if err = os.WriteFile(secret, []byte("must not be visible inside the sandbox\n"), 0600); err != nil {
 		cleanup()
+		_ = os.RemoveAll(workdir)
+		_ = os.RemoveAll(secretDir)
+		return nil, err
+	}
+	runtimeDir, err := os.MkdirTemp("", "pi-square-runtime-")
+	if err != nil {
+		cleanup()
+		_ = os.RemoveAll(workdir)
+		_ = os.RemoveAll(secretDir)
 		return nil, err
 	}
 	home, _ := os.UserHomeDir()
 	home, _ = filepath.EvalSymlinks(home)
-	return &Fixture{Root: root, Binary: binary, Workdir: workdir, HostHome: home, HostSecret: secret, buildDir: buildDir, secretDir: secretDir}, nil
+	return &Fixture{Root: root, Binary: binary, Workdir: workdir, HostHome: home, HostSecret: secret, buildDir: buildDir, secretDir: secretDir, runtimeDir: runtimeDir}, nil
 }
 
 func (f *Fixture) Close() error {
-	for _, dir := range []string{f.Workdir, f.secretDir, f.buildDir} {
+	// Gateways intentionally outlive sessions, so the fixture must stop its
+	// isolated default instance before removing the binary and runtime state.
+	cmd := exec.Command(f.Binary, "gateway", "stop", "default", "--force")
+	cmd.Env = f.Environment("")
+	_ = cmd.Run() // A suite that never launched pi has no gateway to stop.
+	for _, dir := range []string{f.Workdir, f.secretDir, f.runtimeDir, f.buildDir} {
 		_ = os.RemoveAll(dir)
 	}
 	return nil
@@ -108,10 +123,16 @@ func (f *Fixture) Close() error {
 
 func (f *Fixture) Environment(token string) []string {
 	env := CleanEnvironment("")
+	filtered := env[:0]
+	for _, item := range env {
+		if !strings.HasPrefix(item, "XDG_RUNTIME_DIR=") {
+			filtered = append(filtered, item)
+		}
+	}
 	if token == "" {
 		token = FakeHostToken
 	}
-	return append(env, "GH_TOKEN="+token)
+	return append(filtered, "GH_TOKEN="+token, "XDG_RUNTIME_DIR="+f.runtimeDir)
 }
 
 // SessionOptions is the sandbox configuration: fake host token, scratch workdir.

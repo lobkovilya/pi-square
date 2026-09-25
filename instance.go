@@ -27,6 +27,16 @@ var instanceName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,39}$`)
 
 type instancePaths struct{ dir, lock, management, ro, rw string }
 
+func instancePathsAt(dir string) instancePaths {
+	return instancePaths{
+		dir:        dir,
+		lock:       filepath.Join(dir, ".lock"),
+		management: filepath.Join(dir, "control.sock"),
+		ro:         filepath.Join(dir, filepath.Base(roSocket)),
+		rw:         filepath.Join(dir, filepath.Base(wSocket)),
+	}
+}
+
 func pathsFor(name string) (instancePaths, error) {
 	if !instanceName.MatchString(name) {
 		return instancePaths{}, fmt.Errorf("invalid gateway name %q (use 1-40 letters, digits, _ or -)", name)
@@ -40,7 +50,7 @@ func pathsFor(name string) (instancePaths, error) {
 		base = filepath.Join(home, ".cache")
 	}
 	dir := filepath.Join(base, "pi-square", "instances", name)
-	p := instancePaths{dir, filepath.Join(dir, ".lock"), filepath.Join(dir, "control.sock"), filepath.Join(dir, "ro.sock"), filepath.Join(dir, "rw.sock")}
+	p := instancePathsAt(dir)
 	if len(p.management) >= 108 {
 		return instancePaths{}, errors.New("gateway socket path too long")
 	}
@@ -273,7 +283,7 @@ func listInstances(out io.Writer) error {
 // The daemon stays in the host mount namespace. No credential or private CA is
 // stored on disk; only its public CA is returned over the management socket.
 func runGatewayDaemon(dir string) error {
-	p := instancePaths{dir, filepath.Join(dir, ".lock"), filepath.Join(dir, "control.sock"), filepath.Join(dir, "ro.sock"), filepath.Join(dir, "rw.sock")}
+	p := instancePathsAt(dir)
 	secret := os.NewFile(3, "gateway credential")
 	if secret == nil {
 		return errors.New("missing gateway credential")

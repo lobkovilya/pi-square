@@ -56,6 +56,17 @@ var _ = Describe("gateway instances", func() {
 			command("gateway", "stop", "named", "--force")
 		})
 	})
+	It("uses the supervisor ingress socket names", func() {
+		// given
+		dir := GinkgoT().TempDir()
+
+		// when
+		p := instancePathsAt(dir)
+
+		// then
+		Expect(p.ro).To(Equal(filepath.Join(dir, filepath.Base(roSocket))))
+		Expect(p.rw).To(Equal(filepath.Join(dir, filepath.Base(wSocket))))
+	})
 	It("serializes simultaneous default starts and retains its credential and CA until restart", func() {
 		// given
 		var wg sync.WaitGroup
@@ -80,6 +91,8 @@ var _ = Describe("gateway instances", func() {
 		Expect(os.ReadFile(callsFile)).To(HaveLen(len("call\n")))
 		p, err := pathsForWithRuntime("default", runtimeDir)
 		Expect(err).NotTo(HaveOccurred())
+		Expect(p.ro).To(BeAnExistingFile())
+		Expect(p.rw).To(BeAnExistingFile())
 		c, first, err := probeInstance(p, "attach", false)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(first.CA).To(ContainSubstring("BEGIN CERTIFICATE"))
@@ -224,10 +237,5 @@ func pathsForWithRuntime(name, runtimeDir string) (instancePaths, error) {
 	if err != nil {
 		return p, err
 	}
-	p.dir = filepath.Join(runtimeDir, "pi-square", "instances", name)
-	p.lock = filepath.Join(p.dir, ".lock")
-	p.management = filepath.Join(p.dir, "control.sock")
-	p.ro = filepath.Join(p.dir, "ro.sock")
-	p.rw = filepath.Join(p.dir, "rw.sock")
-	return p, nil
+	return instancePathsAt(filepath.Join(runtimeDir, "pi-square", "instances", name)), nil
 }
