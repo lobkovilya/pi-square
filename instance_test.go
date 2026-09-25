@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json"
+	"io/fs"
 	"net"
 	"os"
 	"os/exec"
@@ -67,6 +68,23 @@ var _ = Describe("gateway instances", func() {
 		Expect(p.ro).To(Equal(filepath.Join(dir, filepath.Base(roSocket))))
 		Expect(p.rw).To(Equal(filepath.Join(dir, filepath.Base(wSocket))))
 	})
+	DescribeTable("classifies probe failures",
+		func(err error, expectedState instanceState, expectedReason string) {
+			// given
+			probeErr := err
+
+			// when
+			state, reason := classifyProbe(probeErr)
+
+			// then
+			Expect(state).To(Equal(expectedState))
+			Expect(reason).To(Equal(expectedReason))
+		},
+		Entry("missing control socket", &net.OpError{Op: "dial", Net: "unix", Err: fs.ErrNotExist}, stateStopped, ""),
+		Entry("refused control socket", &net.OpError{Op: "dial", Net: "unix", Err: syscall.ECONNREFUSED}, stateUnhealthy, "stale control socket, daemon not listening"),
+		Entry("timed out health check", &net.OpError{Op: "read", Net: "unix", Err: os.ErrDeadlineExceeded}, stateUnhealthy, "health check timed out"),
+		Entry("protocol mismatch", errProtocolMismatch, stateUnhealthy, "protocol mismatch"),
+	)
 	It("serializes simultaneous default starts and retains its credential and CA until restart", func() {
 		// given
 		var wg sync.WaitGroup
@@ -123,6 +141,30 @@ var _ = Describe("gateway instances", func() {
 		Expect(rotated.CA).NotTo(Equal(first.CA))
 		Expect(os.ReadFile(callsFile)).To(HaveLen(2 * len("call\n")))
 	})
+	It("reports stopped gateways without a socket error", func() {
+		// given
+		_, err := command("gateway", "start", "default")
+		Expect(err).NotTo(HaveOccurred())
+		_, err = command("gateway", "stop", "default")
+		Expect(err).NotTo(HaveOccurred())
+
+		// when
+		output, err := command("gateway", "list")
+
+		// then
+		Expect(err).NotTo(HaveOccurred())
+		Expect(output).To(Equal("default\tstopped\n"))
+		Expect(output).NotTo(ContainSubstring("unhealthy"))
+		Expect(output).NotTo(ContainSubstring("dial unix"))
+
+		// and then
+		p, err := pathsForWithRuntime("other", runtimeDir)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(os.MkdirAll(p.dir, 0700)).To(Succeed())
+		output, err = command("gateway", "list")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(output).To(Equal("default\tstopped\nother\tstopped\n"))
+	})
 	It("rejects missing named gateways, checks actual health, and clears stale sockets", func() {
 		// given
 		missing, missingErr := command("--gateway=named", "--", "--version")
@@ -139,6 +181,7 @@ var _ = Describe("gateway instances", func() {
 		// then
 		Expect(err).NotTo(HaveOccurred())
 		Expect(output).To(ContainSubstring("named\tunhealthy"))
+		Expect(output).NotTo(ContainSubstring("dial unix"))
 		output, err = command("--gateway=named", "--", "--version")
 		Expect(err).To(HaveOccurred())
 		Expect(output).To(ContainSubstring("not healthy"))
@@ -175,6 +218,9 @@ var _ = Describe("gateway instances", func() {
 			return e
 		}).Should(HaveOccurred())
 		conn.Close()
+		output, err := command("gateway", "list")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(output).To(ContainSubstring("default\tunhealthy"))
 		_, err = command("gateway", "start", "default")
 
 		// then
