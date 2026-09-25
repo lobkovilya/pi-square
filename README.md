@@ -82,8 +82,8 @@ This guarantee does not cover credentials independently available to a command.
 HTTPS on port 443 is reachable only through the gateway. For
 `api.github.com:443`, the gateway intercepts TLS and applies the REST/GraphQL
 policy above. Connections to other public destinations—including other GitHub
-hosts and external relays—are end-to-end TLS tunnels: the gateway logs
-connection metadata but neither inspects traffic nor injects its credential.
+hosts and external relays—are end-to-end TLS tunnels: the gateway neither
+inspects traffic nor injects its credential.
 Private, loopback, link-local, and other non-public destinations are rejected.
 Plain HTTP, SSH, and other destination ports are unsupported. Direct
 connections, alternative proxies, and proxy bypass do not work; a command that
@@ -111,8 +111,8 @@ Pi and the bundled extension are trusted and keep normal host networking so pi
 can reach its model provider. Every shell command, in every mode, runs through
 the isolated command runner and can reach nothing but the gateway.
 
-A trusted supervisor owns the network namespaces, the gateway, and command
-execution. Pi asks it to launch commands over a private control channel that
+A shared host-user gateway owns the credential and CA; each trusted supervisor
+owns its network namespaces and command execution. Pi asks it to launch commands over a private control channel that
 launched commands cannot reach. Commands run capability-less in their own
 network, mount, and PID namespaces; they never receive real GitHub
 credentials, the gateway's TLS keys, the control channel, or a handle to the
@@ -122,10 +122,14 @@ code running inside a trusted pi extension.
 
 ## Authentication
 
-`pi-square` reads the host GitHub credential at startup with
+When a gateway instance starts, it snapshots the host GitHub credential with
 `gh auth token --hostname github.com`, so `gh` must already be authenticated
-for GitHub.com (`gh auth login`). The credential is held only in the gateway's
-memory; it is never written to disk, logged, or passed into pi or any command.
+for GitHub.com (`gh auth login`). Attaching another session does **not** refresh
+it: restart the instance after changing `gh` authentication. The credential is
+held only in the gateway's memory; it is never written to disk, logged, or
+passed into pi or any command. Each instance also holds its private CA key in
+memory; supervisors receive only its public certificate, and restarting rotates
+that CA.
 
 For every approved request the gateway strips any client-supplied
 authorization, cookies, and proxy credentials, inserts its own credential, and
@@ -173,9 +177,25 @@ pi-square --version       # pi-square version
 pi-square --help          # pi-square help
 pi-square --mode=dev      # sandbox normally, without GitHub mode prompt guidance
 pi-square --gh-mode=local # explicitly select the initial GitHub mode
+pi-square --gateway=team  # attach to an existing named instance
+pi-square gateway list    # show actual health and live session count
+pi-square gateway start team
+pi-square gateway stop team
+pi-square gateway stop team --force
 pi-square -- --version    # pi version
 pi-square -- --model example "Explain this project"
 ```
+
+By default, `pi-square` atomically starts or attaches to the shared `default`
+gateway for the host user. An explicit `--gateway=NAME` (even `default`) requires
+an already healthy instance; create one with `pi-square gateway start NAME`.
+Instances outlive pi-square sessions. `gateway stop` refuses while sessions are
+attached; `--force` stops it even with active sessions and long-running commands
+lose gateway access (there is no direct-network fallback). State and sockets
+live under `$XDG_RUNTIME_DIR/pi-square/instances/` when set, otherwise under
+`~/.cache/pi-square/instances/`; no credentials or CA private keys are stored
+there. Stale sockets do not count as healthy instances. The wrapper and gateway
+must speak the same protocol version; restart an old instance after upgrading.
 
 All pi arguments (including prompts) must follow `--`. Running `pi-square`
 without arguments starts pi normally. `--mode=dev` keeps the sandbox and

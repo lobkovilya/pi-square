@@ -10,14 +10,16 @@ import (
 
 func TestRunCLI(t *testing.T) {
 	for _, tt := range []struct {
-		name       string
-		args       []string
-		wantArgs   []string
-		wantOutput string
-		wantError  bool
-		wantLaunch bool
-		wantDev    bool
-		wantGHMode string
+		name         string
+		args         []string
+		wantArgs     []string
+		wantOutput   string
+		wantError    bool
+		wantLaunch   bool
+		wantDev      bool
+		wantGHMode   string
+		wantGateway  string
+		wantExplicit bool
 	}{
 		{name: "default", wantLaunch: true},
 		{name: "empty separator", args: []string{"--"}, wantArgs: []string{}, wantLaunch: true},
@@ -29,6 +31,9 @@ func TestRunCLI(t *testing.T) {
 		{name: "preserve arguments", args: []string{"--", "--model", "model", "a prompt", "--", ""}, wantArgs: []string{"--model", "model", "a prompt", "--", ""}, wantLaunch: true},
 		{name: "dev mode", args: []string{"--mode=dev", "--", "prompt"}, wantArgs: []string{"prompt"}, wantLaunch: true, wantDev: true},
 		{name: "publish gh mode", args: []string{"--gh-mode=publish", "--", "prompt"}, wantArgs: []string{"prompt"}, wantLaunch: true, wantGHMode: "publish"},
+		{name: "named gateway", args: []string{"--gateway=team", "--", "prompt"}, wantArgs: []string{"prompt"}, wantLaunch: true, wantGateway: "team", wantExplicit: true},
+		{name: "explicit default", args: []string{"--gateway=default"}, wantLaunch: true, wantGateway: "default", wantExplicit: true},
+		{name: "invalid gateway", args: []string{"--gateway=../bad"}, wantError: true},
 		{name: "invalid mode", args: []string{"--mode=publish"}, wantError: true},
 		{name: "invalid gh mode", args: []string{"--gh-mode=dev"}, wantError: true},
 		{name: "unknown wrapper flag", args: []string{"--model", "model"}, wantError: true},
@@ -38,7 +43,7 @@ func TestRunCLI(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var out bytes.Buffer
 			launched := false
-			err := runCLI(tt.args, &out, func(args []string, devMode bool, ghMode string) error {
+			err := runCLI(tt.args, &out, func(args []string, devMode bool, ghMode, gateway string, explicit bool) error {
 				launched = true
 				if !reflect.DeepEqual(args, tt.wantArgs) {
 					t.Errorf("args = %#v, want %#v", args, tt.wantArgs)
@@ -49,12 +54,19 @@ func TestRunCLI(t *testing.T) {
 				if ghMode != tt.wantGHMode {
 					t.Errorf("ghMode = %q, want %q", ghMode, tt.wantGHMode)
 				}
+				wantGateway := tt.wantGateway
+				if wantGateway == "" {
+					wantGateway = "default"
+				}
+				if gateway != wantGateway || explicit != tt.wantExplicit {
+					t.Errorf("gateway = %q explicit=%v", gateway, explicit)
+				}
 				return nil
 			})
 			if (err != nil) != tt.wantError {
 				t.Fatalf("error = %v, wantError = %v", err, tt.wantError)
 			}
-			if tt.wantError && tt.name != "invalid mode" && tt.name != "invalid gh mode" && !strings.Contains(err.Error(), "after --") {
+			if tt.wantError && tt.name != "invalid mode" && tt.name != "invalid gh mode" && tt.name != "invalid gateway" && !strings.Contains(err.Error(), "after --") {
 				t.Errorf("error lacks separator guidance: %v", err)
 			}
 			if launched != tt.wantLaunch {
@@ -69,7 +81,7 @@ func TestRunCLI(t *testing.T) {
 
 func TestRunCLILaunchError(t *testing.T) {
 	want := errors.New("launch failed")
-	err := runCLI(nil, &bytes.Buffer{}, func([]string, bool, string) error { return want })
+	err := runCLI(nil, &bytes.Buffer{}, func([]string, bool, string, string, bool) error { return want })
 	if !errors.Is(err, want) {
 		t.Fatalf("error = %v, want %v", err, want)
 	}

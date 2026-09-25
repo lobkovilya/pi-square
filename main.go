@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,6 +33,8 @@ func main() {
 	switch {
 	case len(os.Args) >= 3 && os.Args[1] == stageMarker && os.Getenv("PI_SQUARE_STAGE_TOKEN") == os.Args[2]:
 		exitOnError(stage(os.Args[3:]))
+	case len(os.Args) == 3 && os.Args[1] == gatewayMarker:
+		exitOnError(runGatewayDaemon(os.Args[2]))
 	case len(os.Args) >= 2 && os.Args[1] == piStageMarker:
 		exitOnError(runPiStage(os.Args[2:]))
 	case len(os.Args) >= 3 && os.Args[1] == netnsWorkerMarker:
@@ -61,7 +64,7 @@ func fatal(err error) {
 	os.Exit(1)
 }
 
-func run(args []string, devMode bool, initialGHMode string) error {
+func run(args []string, devMode bool, initialGHMode, gatewayName string, explicitGateway bool) error {
 	workdir, err := filepath.EvalSymlinks(mustAbs("."))
 	if err != nil {
 		return fmt.Errorf("resolve workdir: %w", err)
@@ -82,10 +85,19 @@ func run(args []string, devMode bool, initialGHMode string) error {
 		return err
 	}
 
-	token, err := resolveGitHubToken()
+	attachment, caPEM, paths, err := attachInstance(gatewayName, !explicitGateway)
 	if err != nil {
 		return err
 	}
+	defer attachment.Close()
+	if caPEM == "" {
+		return errors.New("gateway returned no CA certificate")
+	}
+	attachmentFile, err := attachment.(*net.UnixConn).File()
+	if err != nil {
+		return err
+	}
+	defer attachmentFile.Close()
 
 	s, err := claimFFF(workdir, home)
 	if err != nil {
@@ -135,7 +147,10 @@ func run(args []string, devMode bool, initialGHMode string) error {
 	cmd := exec.Command("/proc/self/exe", append([]string{stageMarker, stageToken}, args...)...)
 	cmd.Env = env
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	cmd.ExtraFiles = []*os.File{secretsReader}
+	cmd.ExtraFiles = []*os.File{secretsReader, attachmentFile}
+	// The ingress directory is bind-mounted into the trusted supervisor root.
+	env = setEnv(env, "PI_SQUARE_GATEWAY_DIR", paths.dir)
+	cmd.Env = env
 	attr := namespaceAttr(unix.CLONE_NEWUSER | unix.CLONE_NEWNS | unix.CLONE_NEWPID | unix.CLONE_NEWIPC | unix.CLONE_NEWUTS | unix.CLONE_NEWCGROUP)
 	attr.Pdeathsig = syscall.SIGKILL
 	cmd.SysProcAttr = attr
@@ -148,7 +163,7 @@ func run(args []string, devMode bool, initialGHMode string) error {
 	secretsReader.Close()
 
 	payload, err := json.Marshal(secrets{
-		GitHubToken: token,
+		GatewayCA:   caPEM,
 		WToken:      wToken,
 		GitIdentity: hostGitIdentity(),
 	})

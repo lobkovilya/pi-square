@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -23,10 +22,9 @@ import (
 // secrets travel from the host launcher to the supervisor over an inherited
 // pipe so they never appear in any environment or argument list.
 type secrets struct {
-	GitHubToken  string   `json:"github_token"`
-	WToken       string   `json:"w_token"`
-	GitIdentity  []string `json:"git_identity"`
-	SystemCAPath string   `json:"system_ca_path"`
+	GatewayCA   string   `json:"gateway_ca"`
+	WToken      string   `json:"w_token"`
+	GitIdentity []string `json:"git_identity"`
 }
 
 // launchRequest is what the stub asks the supervisor to run. The supervisor
@@ -51,19 +49,19 @@ type worker struct {
 }
 
 type supervisor struct {
-	gw       *gateway
-	workers  map[policyClass]*worker
-	baseEnv  []string
-	workdir  string
-	home     string
-	devMode  bool
-	piPath   string
-	secrets  secrets
-	logger   *log.Logger
-	caBundle []byte
+	attachment *os.File
+	workers    map[policyClass]*worker
+	baseEnv    []string
+	workdir    string
+	home       string
+	devMode    bool
+	piPath     string
+	secrets    secrets
+	caBundle   []byte
 
-	jobs   *jobTracker
-	closed chan struct{}
+	jobs     *jobTracker
+	closed   chan struct{}
+	stopOnce sync.Once
 }
 
 // stage is the supervisor entrypoint. It owns the shared restricted root, the
@@ -84,22 +82,21 @@ func stage(args []string) error {
 		return err
 	}
 
-	if err := setupRestrictedRoot(root, workdir, home, fff, os.Getenv("XDG_RUNTIME_DIR")); err != nil {
+	if err := setupRestrictedRoot(root, workdir, home, fff, os.Getenv("XDG_RUNTIME_DIR"), os.Getenv("PI_SQUARE_GATEWAY_DIR")); err != nil {
 		return err
 	}
 
-	logger := log.New(os.Stderr, "", 0)
 	s := &supervisor{
-		workers: map[policyClass]*worker{},
-		baseEnv: commandBaseEnv(os.Environ()),
-		workdir: workdir,
-		home:    home,
-		devMode: os.Getenv("PI_SQUARE_DEV_MODE") == "1",
-		piPath:  pi,
-		secrets: sec,
-		logger:  logger,
-		jobs:    newJobTracker(),
-		closed:  make(chan struct{}),
+		attachment: os.NewFile(4, "gateway attachment"),
+		workers:    map[policyClass]*worker{},
+		baseEnv:    commandBaseEnv(os.Environ()),
+		workdir:    workdir,
+		home:       home,
+		devMode:    os.Getenv("PI_SQUARE_DEV_MODE") == "1",
+		piPath:     pi,
+		secrets:    sec,
+		jobs:       newJobTracker(),
+		closed:     make(chan struct{}),
 	}
 
 	if err := s.start(); err != nil {
@@ -107,6 +104,9 @@ func stage(args []string) error {
 		return err
 	}
 	defer s.shutdown()
+	// A replacement daemon must never silently take over this session's
+	// sockets. On loss of the attachment, tear down both frontends and jobs.
+	go func() { var b [1]byte; s.attachment.Read(b[:]); s.shutdown() }()
 
 	// Integration hook: drive a single command through the real stub, control
 	// channel, network namespace, and gateway instead of launching pi. Used by
@@ -141,11 +141,7 @@ func (s *supervisor) runSelftest(mode, command string) error {
 }
 
 func (s *supervisor) start() error {
-	ca, err := newEphemeralCA()
-	if err != nil {
-		return err
-	}
-	bundle, err := combinedCABundle(ca.certPEM)
+	bundle, err := combinedCABundle([]byte(s.secrets.GatewayCA))
 	if err != nil {
 		return err
 	}
@@ -157,17 +153,6 @@ func (s *supervisor) start() error {
 		return fmt.Errorf("write CA bundle: %w", err)
 	}
 
-	gw, err := newGateway(ca, s.secrets.GitHubToken, s.logger)
-	if err != nil {
-		return err
-	}
-	s.gw = gw
-	if err := s.listenIngress(classRO, roSocket); err != nil {
-		return err
-	}
-	if err := s.listenIngress(classW, wSocket); err != nil {
-		return err
-	}
 	if err := s.startWorker(classRO, roSocket); err != nil {
 		return err
 	}
@@ -175,25 +160,6 @@ func (s *supervisor) start() error {
 		return err
 	}
 	return s.listenControl()
-}
-
-func (s *supervisor) listenIngress(class policyClass, socketPath string) error {
-	os.Remove(socketPath)
-	listener, err := net.Listen("unix", socketPath)
-	if err != nil {
-		return fmt.Errorf("listen on %s ingress: %w", class, err)
-	}
-	os.Chmod(socketPath, 0600)
-	go func() {
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			go s.gw.serveIngress(conn, class)
-		}
-	}()
-	return nil
 }
 
 func (s *supervisor) startWorker(class policyClass, socketPath string) error {
@@ -387,23 +353,22 @@ func (s *supervisor) reply(conn *net.UnixConn, resp launchResponse) {
 }
 
 func (s *supervisor) shutdown() {
-	select {
-	case <-s.closed:
-	default:
+	s.stopOnce.Do(func() {
 		close(s.closed)
-	}
-	s.jobs.killAll()
-	for _, w := range s.workers {
-		if w.netns != nil {
-			w.netns.Close()
+		s.jobs.killAll()
+		for _, w := range s.workers {
+			if w.netns != nil {
+				w.netns.Close()
+			}
+			if w.cmd != nil && w.cmd.Process != nil {
+				w.cmd.Process.Kill()
+			}
 		}
-		if w.cmd != nil && w.cmd.Process != nil {
-			w.cmd.Process.Kill()
+		if s.attachment != nil {
+			s.attachment.Close()
 		}
-	}
-	for _, socketPath := range []string{roSocket, wSocket, controlSocket} {
-		os.Remove(socketPath)
-	}
+		os.Remove(controlSocket)
+	})
 }
 
 // runPiStage drops every capability inherited from the supervisor and then
@@ -470,7 +435,7 @@ func readSecrets() (secrets, error) {
 	if err := json.NewDecoder(file).Decode(&sec); err != nil {
 		return secrets{}, fmt.Errorf("read secrets: %w", err)
 	}
-	if sec.GitHubToken == "" || sec.WToken == "" {
+	if sec.GatewayCA == "" || sec.WToken == "" {
 		return secrets{}, errors.New("incomplete secrets")
 	}
 	return sec, nil
