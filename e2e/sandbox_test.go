@@ -175,7 +175,7 @@ var _ = Describe("sandbox permissions and isolation", func() {
 			}
 			mutation, mutationErr := session.Bash(ctx, "!", "GH_NO_UPDATE_NOTIFIER=1 gh api graphql -f query='mutation{__typename}'")
 			post, postErr := session.Bash(ctx, "!", "GH_NO_UPDATE_NOTIFIER=1 gh api -X POST /user/repos -f name=x")
-			push, pushErr := session.Bash(ctx, "!", "GIT_TERMINAL_PROMPT=0 git -c credential.helper= push https://github.com/example/example.git :refs/heads/pi-square-denied")
+			push, pushErr := session.Bash(ctx, "!", "d=$(mktemp -d) && git init -q \"$d\" && cd \"$d\" && GIT_TERMINAL_PROMPT=0 git -c credential.helper= push https://github.com/example/example.git :refs/heads/pi-square-denied")
 			screen := session.Screen()
 
 			// then
