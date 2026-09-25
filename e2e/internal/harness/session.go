@@ -208,7 +208,7 @@ func (s *Session) Ready(ctx context.Context) error {
 	}, "startup and model tripwire"); err != nil {
 		return err
 	}
-	return s.Slash(ctx, "/gh-mode status", "GitHub mode: "+s.mode)
+	return s.Slash(ctx, "/gh-mode status", "pi-square: "+s.mode)
 }
 
 func (s *Session) Slash(ctx context.Context, command, expected string) error {
