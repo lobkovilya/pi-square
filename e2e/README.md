@@ -18,10 +18,10 @@ A run without a label filter also defaults to `!live`. Specs run sequentially an
 
 ## Live fixture
 
-Live selection runs exactly six append-only specs: issue creation and an httpbin HTTPS GET in `browse`, `local`, and `publish`. Set:
+Live selection runs seven append-only specs: issue creation and an httpbin HTTPS GET in `browse`, `local`, and `publish`, plus a publish-mode Git push of a throwaway branch. Set:
 
 - `PI_SQUARE_E2E_REPOSITORY=OWNER/REPOSITORY`, a dedicated private repository with issues enabled, default branch `main`, and a one-line `README.md`: `Private fixture repository for pi-square sandbox integration tests.`
-- `PI_SQUARE_E2E_GITHUB_TOKEN`, a repository-scoped PAT with Metadata read, Contents read, and Issues read/write.
+- `PI_SQUARE_E2E_GITHUB_TOKEN`, a repository-scoped PAT with Metadata read, Contents read/write, and Issues read/write.
 
 ```sh
 go test -tags=e2e ./e2e -count=1 -timeout=15m -args -ginkgo.label-filter=live

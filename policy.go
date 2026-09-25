@@ -12,10 +12,16 @@ import (
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
-// The only upstream this gateway will ever talk to.
+// The fixed upstreams whose TLS traffic the gateway intercepts.
 const (
 	permittedHost = "api.github.com"
+	gitHost       = "github.com"
 	permittedPort = "443"
+)
+
+const (
+	gitUploadPack  = "git-upload-pack"
+	gitReceivePack = "git-receive-pack"
 )
 
 // denial is a refused request. The code is a stable identifier the extension
@@ -76,6 +82,24 @@ func authorizeRequest(class policyClass, method, requestPath string, header http
 		return authorizeGraphQL(class, method, header, body)
 	}
 	return authorizeREST(class, method)
+}
+
+// authorizeGit applies the mode policy to a recognized Git smart HTTP
+// service. Fetching is permitted in every class; pushing requires publish.
+func authorizeGit(class policyClass, service string) *denial {
+	switch service {
+	case gitUploadPack:
+		return nil
+	case gitReceivePack:
+		if class.writable() {
+			return nil
+		}
+		return newDenial(denyWriteRequiresPublish, http.StatusForbidden,
+			"git push requires publish mode")
+	default:
+		return newDenial(denyUnsupportedRequest, http.StatusBadRequest,
+			"unsupported Git service")
+	}
 }
 
 func authorizeREST(class policyClass, method string) *denial {
@@ -162,7 +186,7 @@ func isJSONContentType(value string) bool {
 	return mediaType == "application/json"
 }
 
-func hostMatches(authority string) bool {
+func hostMatches(authority, tunnelHost string) bool {
 	host := authority
 	if h, p, err := net.SplitHostPort(authority); err == nil {
 		if p != permittedPort {
@@ -173,5 +197,5 @@ func hostMatches(authority string) bool {
 		return false
 	}
 	host = strings.TrimSuffix(strings.ToLower(host), ".")
-	return host == permittedHost
+	return host == tunnelHost
 }

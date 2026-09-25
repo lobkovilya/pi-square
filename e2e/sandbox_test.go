@@ -151,7 +151,7 @@ var _ = Describe("sandbox permissions and isolation", func() {
 		Entry("in publish mode", "publish"),
 	)
 
-	DescribeTable("denies REST writes and GraphQL mutations without escalation",
+	DescribeTable("denies REST, GraphQL, and Git writes without escalation",
 		func(ctx SpecContext, mode string) {
 			// given
 			opts, err := fixture.SessionOptions(mode)
@@ -175,6 +175,7 @@ var _ = Describe("sandbox permissions and isolation", func() {
 			}
 			mutation, mutationErr := session.Bash(ctx, "!", "GH_NO_UPDATE_NOTIFIER=1 gh api graphql -f query='mutation{__typename}'")
 			post, postErr := session.Bash(ctx, "!", "GH_NO_UPDATE_NOTIFIER=1 gh api -X POST /user/repos -f name=x")
+			push, pushErr := session.Bash(ctx, "!", "GIT_TERMINAL_PROMPT=0 git -c credential.helper= push https://github.com/example/example.git :refs/heads/pi-square-denied")
 			screen := session.Screen()
 
 			// then
@@ -182,6 +183,7 @@ var _ = Describe("sandbox permissions and isolation", func() {
 			Expect(decodeErr).NotTo(HaveOccurred())
 			Expect(mutationErr).NotTo(HaveOccurred())
 			Expect(postErr).NotTo(HaveOccurred())
+			Expect(pushErr).NotTo(HaveOccurred())
 			Expect(rest.Status).To(Equal(0))
 			Expect(text).To(MatchRegexp(`(?m)^HTTP/1\.1 403 `))
 			Expect(text).To(MatchRegexp(`(?m)^X-Pi-Square-Denial: write_requires_publish\r?$`))
@@ -192,6 +194,8 @@ var _ = Describe("sandbox permissions and isolation", func() {
 			Expect(mutation.Output).To(MatchRegexp(`gh: write_requires_publish: GraphQL mutations require publish mode \(HTTP 403\)`))
 			Expect(post.Status).To(Equal(1))
 			Expect(post.Output).To(MatchRegexp(`gh: write_requires_publish: POST is a write and requires publish mode \(HTTP 403\)`))
+			Expect(push.Status).NotTo(Equal(0))
+			Expect(push.Output).To(ContainSubstring("write_requires_publish: git push requires publish mode"))
 			Expect(screen).NotTo(ContainSubstring("Switch mode to publish"))
 			Expect(session.Slash(ctx, "/gh-mode status", "GitHub mode: "+mode)).To(Succeed())
 			Expect(session.Quit(ctx)).To(Succeed())

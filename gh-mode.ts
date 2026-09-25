@@ -54,13 +54,13 @@ function modePrompt(mode: GhMode): string {
 	return [
 		`GitHub safety mode: ${mode}. ${permission}`,
 		"Shell commands can reach public HTTPS destinations on port 443 only through a mandatory proxy.",
-		"For api.github.com, browse and local permit REST GET/HEAD and GraphQL queries using the gateway credential.",
-		"New commands launched in publish may use the gateway credential for REST writes and GraphQL mutations.",
-		"Other public HTTPS destinations, including other GitHub hosts, are raw end-to-end TLS tunnels and receive no gateway credential or policy enforcement.",
+		"For api.github.com, browse and local permit REST GET/HEAD and GraphQL queries using the gateway credential; for github.com, they permit authenticated Git fetches.",
+		"New commands launched in publish may also use the gateway credential for REST writes, GraphQL mutations, and HTTPS Git pushes.",
+		"Other github.com paths are forwarded anonymously; other public HTTPS destinations, including other GitHub hosts, are raw end-to-end TLS tunnels without gateway credentials or policy enforcement.",
 		"Independently available credentials are outside the GitHub safety-mode guarantee.",
 		"Plain HTTP, non-HTTPS ports, SSH, direct networking, and proxy bypass do not work.",
 		"Mode changes affect newly launched commands only; commands already running keep the permissions they launched with.",
-		"If a task needs a write through api.github.com, attempt the command once; the mode guard offers to switch to publish. If the user keeps the current mode, do not repeat the blocked operation. The user can also switch with /gh-mode.",
+		"If a task needs a GitHub API write or Git push, attempt the command once; the mode guard offers to switch to publish. If the user keeps the current mode, do not repeat the blocked operation. The user can also switch with /gh-mode.",
 	].join(" ");
 }
 
@@ -206,7 +206,7 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 			const arg = args.trim().toLowerCase();
 			if (!arg || arg === "status") {
 				updateStatus(ctx);
-				ctx.ui.notify(`${GITHUB_ICON} GitHub mode: ${mode}\n${namedAccess(mode)}\nGit follows workdir access. GitHub API RO covers gateway-authenticated REST GET/HEAD and GraphQL queries only; RW adds approved writes and mutations.\nNet permits other public HTTPS traffic on port 443 through the gateway, not arbitrary networking.\nMode changes affect newly launched commands; running commands keep their permissions.`, "info");
+				ctx.ui.notify(`${GITHUB_ICON} GitHub mode: ${mode}\n${namedAccess(mode)}\nGit follows workdir access. GitHub API RO covers gateway-authenticated REST GET/HEAD, GraphQL queries, and Git fetches; RW adds approved API writes, mutations, and Git pushes.\nNet permits other public HTTPS traffic on port 443 through the gateway, not arbitrary networking.\nMode changes affect newly launched commands; running commands keep their permissions.`, "info");
 				return;
 			}
 			if (arg === "browse" || arg === "local" || arg === "publish") return setMode(arg, ctx);

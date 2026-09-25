@@ -49,13 +49,15 @@ var hopByHopHeaders = []string{
 // ingress classes; the class is supplied by the caller (bound to which listener
 // accepted the connection) and never inferred from client bytes.
 type gateway struct {
-	ca           *caMaterial
-	leafMu       sync.Mutex
-	leaf         tls.Certificate
-	token        string
-	client       *http.Client
-	upstreamBase *url.URL
-	logger       *log.Logger
+	ca              *caMaterial
+	leafMu          sync.Mutex
+	leaves          map[string]tls.Certificate
+	token           string
+	client          *http.Client
+	upstreamBase    *url.URL
+	gitClient       *http.Client
+	gitUpstreamBase *url.URL
+	logger          *log.Logger
 
 	// These hooks make destination validation and dialing independently
 	// testable. Production instances use the system resolver and a direct dialer.
@@ -65,39 +67,24 @@ type gateway struct {
 }
 
 func newGateway(ca *caMaterial, token string, logger *log.Logger) (*gateway, error) {
-	leaf, err := ca.leafFor(permittedHost, time.Now())
-	if err != nil {
-		return nil, err
-	}
-	base := &url.URL{Scheme: "https", Host: permittedHost + ":" + permittedPort}
-	transport := &http.Transport{
-		Proxy: nil, // never honor inherited outbound proxy settings
-		DialContext: (&net.Dialer{
-			Timeout: gatewayDial,
-		}).DialContext,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          32,
-		IdleConnTimeout:       gatewayIdle,
-		TLSHandshakeTimeout:   gatewayDial,
-		ResponseHeaderTimeout: gatewayResponse,
-		TLSClientConfig: &tls.Config{
-			MinVersion: tls.VersionTLS12,
-			ServerName: permittedHost,
-		},
+	leaves := make(map[string]tls.Certificate, 2)
+	for _, host := range []string{permittedHost, gitHost} {
+		leaf, err := ca.leafFor(host, time.Now())
+		if err != nil {
+			return nil, err
+		}
+		leaves[host] = leaf
 	}
 	dialer := &net.Dialer{Timeout: gatewayDial}
 	return &gateway{
-		ca:    ca,
-		leaf:  leaf,
-		token: token,
-		client: &http.Client{
-			Transport: transport,
-			CheckRedirect: func(*http.Request, []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		},
-		upstreamBase: base,
-		logger:       logger,
+		ca:              ca,
+		leaves:          leaves,
+		token:           token,
+		client:          newUpstreamClient(permittedHost),
+		upstreamBase:    &url.URL{Scheme: "https", Host: permittedHost + ":" + permittedPort},
+		gitClient:       newUpstreamClient(gitHost),
+		gitUpstreamBase: &url.URL{Scheme: "https", Host: gitHost + ":" + permittedPort},
+		logger:          logger,
 		lookupIP: func(ctx context.Context, host string) ([]netip.Addr, error) {
 			return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 		},
@@ -105,38 +92,64 @@ func newGateway(ca *caMaterial, token string, logger *log.Logger) (*gateway, err
 	}, nil
 }
 
-func (g *gateway) tlsConfig() *tls.Config {
-	return &tls.Config{
-		MinVersion: tls.VersionTLS12,
-		NextProtos: []string{"http/1.1"},
-		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-			if hello.ServerName != "" && normalizeHostname(hello.ServerName) != permittedHost {
-				return nil, fmt.Errorf("unexpected SNI %q", hello.ServerName)
-			}
-			return g.currentLeaf(time.Now())
+func newUpstreamClient(host string) *http.Client {
+	transport := &http.Transport{
+		Proxy:                 nil, // never honor inherited outbound proxy settings
+		DialContext:           (&net.Dialer{Timeout: gatewayDial}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          32,
+		IdleConnTimeout:       gatewayIdle,
+		TLSHandshakeTimeout:   gatewayDial,
+		ResponseHeaderTimeout: gatewayResponse,
+		TLSClientConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			ServerName: host,
+		},
+	}
+	return &http.Client{
+		Transport: transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
 		},
 	}
 }
 
-// currentLeaf returns the leaf certificate, renewing it ahead of expiry so a
-// long-running instance keeps serving valid certificates.
-func (g *gateway) currentLeaf(now time.Time) (*tls.Certificate, error) {
+func (g *gateway) tlsConfig(host string) *tls.Config {
+	return &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		NextProtos: []string{"http/1.1"},
+		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			if hello.ServerName != "" && normalizeHostname(hello.ServerName) != host {
+				return nil, fmt.Errorf("unexpected SNI %q", hello.ServerName)
+			}
+			return g.currentLeaf(host, time.Now())
+		},
+	}
+}
+
+// currentLeaf returns a host's leaf certificate, renewing it ahead of expiry
+// so a long-running instance keeps serving valid certificates.
+func (g *gateway) currentLeaf(host string, now time.Time) (*tls.Certificate, error) {
 	g.leafMu.Lock()
 	defer g.leafMu.Unlock()
-	if now.Before(g.leaf.Leaf.NotAfter.Add(-leafRenewal)) {
-		return &g.leaf, nil
+	leaf, ok := g.leaves[host]
+	if !ok {
+		return nil, fmt.Errorf("unsupported certificate host %q", host)
 	}
-	leaf, err := g.ca.leafFor(permittedHost, now)
+	if now.Before(leaf.Leaf.NotAfter.Add(-leafRenewal)) {
+		return &leaf, nil
+	}
+	renewed, err := g.ca.leafFor(host, now)
 	if err != nil {
 		return nil, err
 	}
-	g.leaf = leaf
-	return &g.leaf, nil
+	g.leaves[host] = renewed
+	return &renewed, nil
 }
 
 // serveIngress handles one client connection arriving on a class ingress. It
-// intercepts only the fixed GitHub API endpoint; all other public HTTPS
-// destinations are byte-for-byte tunnels.
+// intercepts the fixed GitHub API and Git smart HTTP endpoints; all other
+// public HTTPS destinations are byte-for-byte tunnels.
 func (g *gateway) serveIngress(conn net.Conn, class policyClass) {
 	defer conn.Close()
 
@@ -157,7 +170,7 @@ func (g *gateway) serveIngress(conn net.Conn, class policyClass) {
 		g.writeConnectError(conn, http.StatusBadRequest, "invalid CONNECT authority")
 		return
 	}
-	if host == permittedHost && port != permittedPort {
+	if (host == permittedHost || host == gitHost) && port != permittedPort {
 		g.log(class, req.Method, req.Host, "-", denyUnsupportedHost, http.StatusForbidden)
 		g.writeConnectError(conn, http.StatusForbidden, "unsupported CONNECT authority")
 		return
@@ -172,7 +185,7 @@ func (g *gateway) serveIngress(conn net.Conn, class policyClass) {
 	// continuing with the underlying connection.
 	buffered := io.MultiReader(br, conn)
 	conn.SetReadDeadline(time.Time{})
-	if host != permittedHost {
+	if host != permittedHost && host != gitHost {
 		g.servePassthrough(conn, buffered, class, host, port)
 		return
 	}
@@ -180,8 +193,12 @@ func (g *gateway) serveIngress(conn net.Conn, class policyClass) {
 	if _, err := io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
 		return
 	}
-	tlsConn := tls.Server(&readerConn{Conn: conn, reader: buffered}, g.tlsConfig())
+	tlsConn := tls.Server(&readerConn{Conn: conn, reader: buffered}, g.tlsConfig(host))
 	if err := tlsConn.Handshake(); err != nil {
+		return
+	}
+	if host == gitHost {
+		g.serveGitTunnel(tlsConn, class)
 		return
 	}
 	g.serveTunnel(tlsConn, class)
@@ -401,7 +418,7 @@ func (g *gateway) serveTunnel(tlsConn *tls.Conn, class policyClass) {
 func (g *gateway) dispatch(class policyClass, req *http.Request) (*http.Response, bool) {
 	keepAlive := !req.Close
 
-	if !hostMatches(req.Host) {
+	if !hostMatches(req.Host, permittedHost) {
 		return g.denialResponse(req, newDenial(denyUnsupportedHost, http.StatusForbidden, "unsupported request authority")), false
 	}
 	if req.Header.Get("Upgrade") != "" {
@@ -536,6 +553,7 @@ func sanitizeResponseHeaders(header http.Header) {
 		header.Del(h)
 	}
 	header.Del("Set-Cookie")
+	header.Del("WWW-Authenticate")
 }
 
 // connectionTokens returns the set of header names named in a Connection header,

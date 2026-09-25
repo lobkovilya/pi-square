@@ -94,6 +94,33 @@ var _ = Describe("live gateway smoke tests", Label("live"), Ordered, ContinueOnF
 		Entry("in publish mode", "publish", true),
 	)
 
+	It("pushes a throwaway branch in publish mode", func(ctx SpecContext) {
+		// given
+		branch := unique("pi-square-e2e-push-")
+		opts, err := liveFixture.SessionOptions("publish")
+		Expect(err).NotTo(HaveOccurred())
+		session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode=publish", "--"), opts)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		command := harness.ShellJoin("git", "-c", "credential.helper=", "push", "origin", "HEAD:refs/heads/"+branch)
+
+		// when
+		result, err := session.Bash(ctx, "!", command)
+
+		// then
+		Expect(err).NotTo(HaveOccurred())
+		Expect(session.Quit(ctx)).To(Succeed())
+		diagnostic := harness.FormatResult(result)
+		Expect(result.Status).To(Equal(0), "%s", diagnostic)
+		api, cancel := bounded(ctx, 30*time.Second)
+		defer cancel()
+		ref, err := liveFixture.API(api, "repos/"+liveFixture.Repository+"/git/ref/heads/"+branch)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ref["ref"]).To(Equal("refs/heads/" + branch))
+		Expect(ref["object"]).To(HaveKeyWithValue("type", "commit"))
+		GinkgoWriter.Printf("Retained append-only branch: %s#%s\n", liveFixture.Repository, branch)
+	})
+
 	DescribeTable("runs curl to public HTTPS",
 		func(ctx SpecContext, mode string) {
 			// given
