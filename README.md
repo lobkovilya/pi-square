@@ -181,7 +181,7 @@ pi-square --help          # pi-square help
 pi-square --mode=dev      # sandbox normally, without GitHub mode prompt guidance
 pi-square --gh-mode=local # explicitly select the initial GitHub mode
 pi-square --gateway=team  # attach to an existing named instance
-pi-square gateway list    # show actual health and live session count
+pi-square gateway list    # show running health, stopped state, and live session count
 pi-square gateway start team
 pi-square gateway stop team
 pi-square gateway stop team --force

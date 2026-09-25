@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"os"
@@ -39,6 +40,42 @@ func instancePathsAt(dir string) instancePaths {
 }
 
 var errProtocolMismatch = errors.New("gateway protocol mismatch")
+
+type instanceState int
+
+const (
+	stateStopped instanceState = iota
+	stateHealthy
+	stateUnhealthy
+)
+
+func classifyProbe(err error) (instanceState, string) {
+	if err == nil {
+		return stateHealthy, ""
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return stateStopped, ""
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return stateUnhealthy, "stale control socket, daemon not listening"
+	}
+	if errors.Is(err, errProtocolMismatch) {
+		return stateUnhealthy, "protocol mismatch"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return stateUnhealthy, "health check timed out"
+	}
+	return stateUnhealthy, err.Error()
+}
+
+func probeError(name string, err error) error {
+	state, reason := classifyProbe(err)
+	if state == stateStopped {
+		return fmt.Errorf("gateway %q is not running", name)
+	}
+	return fmt.Errorf("gateway %q is not healthy: %s", name, reason)
+}
 
 // daemonError is a refusal reported by a healthy gateway, as opposed to a
 // connection or handshake failure.
@@ -141,11 +178,11 @@ func attachInstance(name string, startDefault bool) (net.Conn, string, instanceP
 	if err == nil {
 		return conn, msg.CA, p, nil
 	}
+	if !startDefault {
+		return nil, "", p, probeError(name, err)
+	}
 	if errors.Is(err, errProtocolMismatch) {
 		return nil, "", p, err
-	}
-	if !startDefault {
-		return nil, "", p, fmt.Errorf("gateway %q is not healthy: %w", name, err)
 	}
 	if err := startInstanceLocked(p); err != nil {
 		return nil, "", p, err
@@ -260,7 +297,7 @@ func stopInstance(name string, force bool) error {
 		return fmt.Errorf("gateway %q: %w", name, err)
 	}
 	if err != nil {
-		return fmt.Errorf("gateway %q is not healthy: %w", name, err)
+		return probeError(name, err)
 	}
 	defer conn.Close()
 	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
@@ -290,9 +327,13 @@ func listInstances(out io.Writer) error {
 		}
 		path, _ := pathsFor(entry.Name())
 		conn, msg, err := probeInstance(path, "health", false)
-		if err != nil {
-			fmt.Fprintf(out, "%s\tunhealthy (%v)\n", entry.Name(), err)
-		} else {
+		state, reason := classifyProbe(err)
+		switch state {
+		case stateStopped:
+			fmt.Fprintf(out, "%s\tstopped\n", entry.Name())
+		case stateUnhealthy:
+			fmt.Fprintf(out, "%s\tunhealthy (%s)\n", entry.Name(), reason)
+		case stateHealthy:
 			conn.Close()
 			fmt.Fprintf(out, "%s\thealthy\t%d active\n", entry.Name(), msg.Active)
 		}
