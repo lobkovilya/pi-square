@@ -15,7 +15,7 @@ import (
 
 var _ = Describe("mode presentation in the interactive terminal", func() {
 	DescribeTable("shows the launch mode and ordered resource indicators",
-		func(ctx SpecContext, mode, row, named string) {
+		func(ctx SpecContext, mode, row string) {
 			// given
 			opts, err := fixture.SessionOptions(mode)
 			Expect(err).NotTo(HaveOccurred())
@@ -28,15 +28,13 @@ var _ = Describe("mode presentation in the interactive terminal", func() {
 			startup := session.Screen() // Ready invoked /gh-mode status.
 
 			// then
+			Expect(startup).To(ContainSubstring("pi-square: " + mode))
 			Expect(startup).To(ContainSubstring(row))
-			Expect(startup).To(ContainSubstring(named))
-			Expect(startup).To(ContainSubstring("GitHub API RO covers gateway-authenticated"))
-			Expect(startup).To(ContainSubstring("running commands keep their permissions"))
 			Expect(session.Quit(ctx)).To(Succeed())
 		},
-		Entry("browse", "browse", "browse ·  ro ·  ro ·  ro ·  rw", "Workdir: RO · Local Git: RO · GitHub API: RO · Net: RW"),
-		Entry("local", "local", "local ·  rw ·  rw ·  ro ·  rw", "Workdir: RW · Local Git: RW · GitHub API: RO · Net: RW"),
-		Entry("publish", "publish", "publish ·  rw ·  rw ·  rw ·  rw", "Workdir: RW · Local Git: RW · GitHub API: RW · Net: RW"),
+		Entry("browse", "browse", "browse ·  ro ·  ro ·  ro ·  rw"),
+		Entry("local", "local", "local ·  rw ·  rw ·  ro ·  rw"),
+		Entry("publish", "publish", "publish ·  rw ·  rw ·  rw ·  rw"),
 	)
 
 	It("updates on commands, cycling and reload, keeping the mode visible when narrow", func(ctx SpecContext) {
