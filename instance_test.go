@@ -93,9 +93,11 @@ var _ = Describe("gateway instances", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(p.ro).To(BeAnExistingFile())
 		Expect(p.rw).To(BeAnExistingFile())
+		Expect(p.log).To(BeAnExistingFile())
 		c, first, err := probeInstance(p, "attach", false)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(first.CA).To(ContainSubstring("BEGIN CERTIFICATE"))
+		Expect(first.Active).To(Equal(1))
 		_, err = command("gateway", "stop", "default")
 		Expect(err).To(HaveOccurred())
 		c.Close()
@@ -223,7 +225,8 @@ var _ = Describe("gateway instances", func() {
 
 		// then
 		Expect(err).To(HaveOccurred())
-		Expect(output).To(ContainSubstring("active session"))
+		Expect(output).To(ContainSubstring("1 active session"))
+		Expect(output).NotTo(ContainSubstring("not healthy"))
 		_, err = command("gateway", "stop", "default", "--force")
 		Expect(err).NotTo(HaveOccurred())
 		_, _, err = probeInstance(p, "health", false)

@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -300,5 +301,108 @@ func TestPassthroughBothClassesAndBufferedBytes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestForwardStreamsLargeResponses(t *testing.T) {
+	size := maxRequestBody + 4096
+	payload := bytes.Repeat([]byte("x"), size)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(payload)
+	}))
+	t.Cleanup(server.Close)
+	base, _ := url.Parse(server.URL)
+	gw := &gateway{token: "real-credential", client: server.Client(), upstreamBase: base}
+
+	resp, _ := gw.dispatch(classRO, newRequest(t, "GET", "https://api.github.com/big", "", nil))
+	defer resp.Body.Close()
+	var out bytes.Buffer
+	if err := resp.Write(&out); err != nil {
+		t.Fatal(err)
+	}
+	relayed, err := http.ReadResponse(bufio.NewReader(&out), resp.Request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(relayed.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(body) != size {
+		t.Fatalf("relayed %d bytes, want %d", len(body), size)
+	}
+}
+
+func TestLeafRenewsBeforeExpiry(t *testing.T) {
+	ca, err := newEphemeralCA()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw, err := newGateway(ca, "token", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	same, err := gw.currentLeaf(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if same.Leaf.SerialNumber.Cmp(gw.leaf.Leaf.SerialNumber) != 0 {
+		t.Fatal("fresh leaf was replaced")
+	}
+	first := same.Leaf.SerialNumber
+	later := now.Add(leafValidity - leafRenewal + time.Minute)
+	renewed, err := gw.currentLeaf(later)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renewed.Leaf.SerialNumber.Cmp(first) == 0 {
+		t.Fatal("leaf was not renewed ahead of expiry")
+	}
+	if !later.Before(renewed.Leaf.NotAfter) || !renewed.Leaf.NotBefore.Before(later) {
+		t.Fatalf("renewed leaf validity %v-%v does not cover %v", renewed.Leaf.NotBefore, renewed.Leaf.NotAfter, later)
+	}
+	if err := renewed.Leaf.CheckSignatureFrom(ca.cert); err != nil {
+		t.Fatalf("renewed leaf is not signed by the instance CA: %v", err)
+	}
+}
+
+func TestForwardFramesDecompressedResponses(t *testing.T) {
+	payload := []byte(`{"decompressed":true}`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			t.Errorf("transport did not request gzip: %q", r.Header.Get("Accept-Encoding"))
+		}
+		var compressed bytes.Buffer
+		zw := gzip.NewWriter(&compressed)
+		zw.Write(payload)
+		zw.Close()
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Set("Content-Length", fmt.Sprint(compressed.Len()))
+		w.Write(compressed.Bytes())
+	}))
+	t.Cleanup(server.Close)
+	base, _ := url.Parse(server.URL)
+	gw := &gateway{token: "real-credential", client: server.Client(), upstreamBase: base}
+
+	resp, _ := gw.dispatch(classRO, newRequest(t, "GET", "https://api.github.com/x", "", nil))
+	defer resp.Body.Close()
+	var out bytes.Buffer
+	if err := resp.Write(&out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(out.String(), "HTTP/1.1 200") {
+		t.Fatalf("status line = %q", strings.SplitN(out.String(), "\r\n", 2)[0])
+	}
+	relayed, err := http.ReadResponse(bufio.NewReader(&out), resp.Request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if relayed.ContentLength < 0 && len(relayed.TransferEncoding) == 0 {
+		t.Fatal("relayed body has no explicit framing")
+	}
+	body, err := io.ReadAll(relayed.Body)
+	if err != nil || !bytes.Equal(body, payload) {
+		t.Fatalf("body = %q, %v; want %q", body, err, payload)
 	}
 }

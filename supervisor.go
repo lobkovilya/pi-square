@@ -86,8 +86,11 @@ func stage(args []string) error {
 		return err
 	}
 
+	// Inherited descriptors are not close-on-exec; without this, pi, the
+	// network workers, and every command would inherit the attachment.
+	unix.CloseOnExec(attachmentFD)
 	s := &supervisor{
-		attachment: os.NewFile(4, "gateway attachment"),
+		attachment: os.NewFile(attachmentFD, "gateway attachment"),
 		workers:    map[policyClass]*worker{},
 		baseEnv:    commandBaseEnv(os.Environ()),
 		workdir:    workdir,

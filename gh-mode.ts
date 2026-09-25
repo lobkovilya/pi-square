@@ -105,7 +105,6 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 	delete process.env.PI_SQUARE_INITIAL_GH_MODE;
 	let applyRequestedInitialMode = requestedInitialMode === "browse" || requestedInitialMode === "local" || requestedInitialMode === "publish";
 	const workdir = fs.realpathSync.native(process.cwd());
-	const launchedMode = new Map<string, GhMode>();
 
 	function persistMode(): void {
 		pi.appendEntry(STATE_ENTRY, { mode });
@@ -148,9 +147,8 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 		return true;
 	}
 
-	async function routeBash(event: { input: { command?: string }; toolName: string; toolCallId: string }) {
+	async function routeBash(event: { input: { command?: string }; toolName: string }) {
 		if (event.toolName !== "bash" || typeof event.input.command !== "string") return;
-		launchedMode.set(event.toolCallId, mode);
 		event.input.command = routeCommand(event.input.command, mode);
 	}
 
@@ -170,7 +168,6 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 	}
 
 	async function offerEscalationOnDenial(event: ToolResultEvent, ctx: ExtensionContext) {
-		launchedMode.delete(event.toolCallId);
 		if (event.toolName !== "bash") return;
 		const text = event.content.map((part) => (part.type === "text" ? part.text : "")).join("\n");
 		if (!text.includes(DENY_WRITE)) return;

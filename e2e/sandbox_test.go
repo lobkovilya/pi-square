@@ -117,6 +117,9 @@ var _ = Describe("sandbox permissions and isolation", func() {
 				"echo GH_TOKEN=$GH_TOKEN", "echo HTTPS_PROXY=$HTTPS_PROXY", "echo HOME=$HOME", "echo PI_SQUARE_VARS=$(env | grep -c '^PI_SQUARE_')",
 				"echo LEAKED_HOST_TOKEN=$(env | grep -c " + harness.ShellJoin(harness.FakeHostToken) + ")", "echo PID1=$(cat /proc/1/comm)",
 				"echo CONTROL_SOCKET=$(test -S /run/pi-square/control.sock && echo reachable || echo hidden)", "echo GATEWAY_DIR=$(ls /run/pi-square/gateway >/dev/null 2>&1 && echo readable || echo masked)",
+				// Sockets other than the standard descriptors of the command's root shell (PID 1)
+				// and of this shell, which bash keeps as saved copies across redirections.
+				"std=$(readlink /proc/1/fd/0 /proc/1/fd/1 /proc/1/fd/2 /proc/$$/fd/0 /proc/$$/fd/1 /proc/$$/fd/2)", "n=0", "for f in /proc/$$/fd/*; do t=$(readlink $f); case $t in socket:*) case \"$std\" in *\"$t\"*) ;; *) n=$((n+1));; esac;; esac; done", "echo INHERITED_SOCKETS=$n",
 				"echo HOST_TMP=$(test -e " + harness.ShellJoin(fixture.HostSecret) + " && echo visible || echo hidden)", "echo WORKDIR=$(test -d " + harness.ShellJoin(fixture.Workdir) + " && echo visible || echo hidden)"}, "; ")
 
 			// when
@@ -133,6 +136,7 @@ var _ = Describe("sandbox permissions and isolation", func() {
 			Expect(v["PID1"]).To(Equal("bash"))
 			Expect(v["CONTROL_SOCKET"]).To(Equal("hidden"))
 			Expect(v["GATEWAY_DIR"]).To(Equal("masked"))
+			Expect(v["INHERITED_SOCKETS"]).To(Equal("0"))
 			Expect(v["HOST_TMP"]).To(Equal("hidden"))
 			Expect(v["WORKDIR"]).To(Equal("visible"))
 			if mode == "publish" {

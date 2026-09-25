@@ -28,11 +28,26 @@ func TestIntegration(t *testing.T) {
 	if err := build.Run(); err != nil {
 		t.Fatalf("build: %v", err)
 	}
+	// Socket paths are length-limited, so the instance directory needs a short
+	// parent; the test must not touch or leave behind the user's real instance.
+	runtimeDir, err := os.MkdirTemp("/tmp", "pi-square-itest-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := append(os.Environ(), "XDG_RUNTIME_DIR="+runtimeDir)
+	t.Cleanup(func() {
+		stop := exec.Command(bin, "gateway", "stop", "default", "--force")
+		stop.Env = env
+		if out, err := stop.CombinedOutput(); err != nil {
+			t.Logf("stop gateway: %v: %s", err, out)
+		}
+		os.RemoveAll(runtimeDir)
+	})
 
 	selftest := func(t *testing.T, mode, command string) (string, int) {
 		t.Helper()
 		cmd := exec.Command(bin)
-		cmd.Env = append(os.Environ(),
+		cmd.Env = append(env,
 			"PI_SQUARE_SELFTEST_MODE="+mode,
 			"PI_SQUARE_SELFTEST_CMD="+command,
 		)

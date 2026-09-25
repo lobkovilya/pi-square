@@ -126,11 +126,10 @@ func authorizeGraphQL(class policyClass, method string, header http.Header, body
 	}
 }
 
-// isGraphQLPath matches only the exact normalized GraphQL endpoint. Every other
-// spelling (a trailing slash, a subpath, a query string carrying the document)
-// is deliberately not treated as GraphQL so it cannot inherit the REST read
-// allowance; such requests are handled by the REST rules and, for the variants
-// that matter, rejected there.
+// isGraphQLPath matches the GraphQL endpoint after path normalization, so
+// spellings such as a trailing slash or a dot segment still receive the
+// GraphQL rules. Subpaths are handled by the REST rules, where a POST can never
+// inherit the read allowance.
 func isGraphQLPath(requestPath string) bool {
 	return normalizePath(requestPath) == "/graphql"
 }
