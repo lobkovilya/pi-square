@@ -41,13 +41,18 @@ function restoreMode(ctx: ExtensionContext): GhMode {
 }
 
 function modePrompt(mode: GhMode): string {
+	const intent = mode === "browse"
+		? "The user intends analytical work only: investigation, research, planning, or review. Do not begin implementation or publish results. A review request means report findings in this conversation, not post comments or submit a review."
+		: mode === "local"
+			? "The user intends local implementation. You may edit, test, and commit locally, but keep your work on this host. Do not push, publish, or upload code, patches, findings, or other work products, even through otherwise available network access or credentials."
+			: "The user permits publishing work as part of the requested task, including pushes, pull requests, issues, comments, and submitted reviews. Publication is allowed, not required.";
 	const permission = mode === "browse"
 		? "The entire workdir is read-only, and the gateway GitHub credential cannot perform remote writes."
 		: mode === "local"
 			? "Local Git changes are allowed; the gateway GitHub credential cannot perform remote writes."
 			: "Local Git changes and remote GitHub writes using the gateway credential are allowed.";
 	return [
-		`GitHub safety mode: ${mode}. ${permission}`,
+		`GitHub safety mode: ${mode}. ${intent} ${permission}`,
 		"Shell commands can reach public HTTPS destinations on port 443 only through a mandatory proxy.",
 		"For api.github.com, browse and local permit REST GET/HEAD and GraphQL queries using the gateway credential; for github.com, they permit authenticated Git fetches.",
 		"New commands launched in publish may also use the gateway credential for REST writes, GraphQL mutations, and HTTPS Git pushes.",
@@ -55,7 +60,7 @@ function modePrompt(mode: GhMode): string {
 		"Independently available credentials are outside the GitHub safety-mode guarantee.",
 		"Plain HTTP, non-HTTPS ports, SSH, direct networking, and proxy bypass do not work.",
 		"Mode changes affect newly launched commands only; commands already running keep the permissions they launched with.",
-		"If a task needs a GitHub API write or Git push, attempt the command once; the mode guard offers to switch to publish. If the user keeps the current mode, do not repeat the blocked operation. The user can also switch with /gh-mode.",
+		"Only when publication is explicitly requested and needs a GitHub API write or Git push, attempt the command once; the mode guard offers to switch to publish. Do not trigger escalation merely because a task could involve publishing. If the user keeps the current mode, do not repeat the blocked operation. The user can also switch with /gh-mode.",
 	].join(" ");
 }
 
