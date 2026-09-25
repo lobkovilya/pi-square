@@ -64,9 +64,10 @@ not necessarily protected by a dedicated metadata mechanism.
 The GitHub icon means **gateway-authenticated GitHub API and smart HTTP Git**,
 not GitHub-wide read-only access. RO allows approved REST GET/HEAD, GraphQL
 queries, and HTTPS Git fetches. RW also allows approved REST writes, GraphQL
-mutations, and HTTPS Git pushes. Other paths on `github.com` remain anonymous,
-and other GitHub hosts use raw HTTPS tunnels. Independently available
-credentials are outside the gateway-credential guarantee.
+mutations, and HTTPS Git pushes. Other paths on `github.com` receive no gateway
+credential, but client-supplied credentials pass through; other GitHub hosts use
+raw HTTPS tunnels. Independently available credentials are outside the
+gateway-credential guarantee.
 
 Net means other public HTTPS traffic through the mandatory gateway, including
 non-API GitHub hosts. RW allows requests beyond reads, not arbitrary network
@@ -82,8 +83,13 @@ This guarantee does not cover credentials independently available to a command.
 HTTPS on port 443 is reachable only through the gateway. For
 `api.github.com:443`, the gateway intercepts TLS and applies the REST/GraphQL
 policy above. It also intercepts `github.com:443`, authenticating only strict
-Git smart HTTP fetch/push endpoints and forwarding all other paths anonymously.
-Connections to other public destinations—including other GitHub hosts and
+Git smart HTTP fetch/push endpoints with the gateway credential and forwarding
+all other paths with any client-supplied credentials unchanged. Because both
+intercepted hosts use the gateway's private CA, clients must trust
+`/run/pi-square/ca-bundle.crt`; the wrapper exports common TLS variables,
+including `SSL_CERT_FILE`, `GIT_SSL_CAINFO`, and `DENO_CERT`, but tools that
+ignore them need explicit CA configuration. Connections to other public
+destinations—including other GitHub hosts and
 external relays—are end-to-end TLS tunnels: the gateway neither inspects
 traffic nor injects its credential.
 Private, loopback, link-local, and other non-public destinations are rejected.
@@ -187,7 +193,7 @@ pi-square --help          # pi-square help
 pi-square --mode=dev      # sandbox normally, without GitHub mode prompt guidance
 pi-square --gh-mode=local # explicitly select the initial GitHub mode
 pi-square --gateway=team  # attach to an existing named instance
-pi-square gateway list    # show actual health and live session count
+pi-square gateway list    # show running health, stopped state, and live session count
 pi-square gateway start team
 pi-square gateway stop team
 pi-square gateway stop team --force
@@ -227,10 +233,12 @@ project directory.
   I/O; do not assume all pi traffic is isolated.
 - Only `api.github.com` REST/GraphQL and recognized `github.com` Git smart HTTP
   fetch/push endpoints receive the gateway credential and policy enforcement.
-  Other `github.com` paths are anonymous, and other public HTTPS destinations
-  are raw tunnels. SSH Git, LFS, registries, authenticated release assets,
-  raw-content hosts, and GitHub Enterprise receive no gateway-injected
-  authentication; non-HTTPS ports remain unsupported.
+  Other `github.com` paths receive no gateway-injected authentication, but
+  client credentials pass through; other public HTTPS destinations are raw
+  tunnels. SSH Git, LFS, registries, authenticated release assets, raw-content
+  hosts, and GitHub Enterprise receive no gateway-injected authentication;
+  non-HTTPS ports remain unsupported. Tools accessing intercepted hosts must
+  trust `/run/pi-square/ca-bundle.crt` and may need tool-specific CA settings.
 - pi's own credentials under `~/.pi` are readable by the agent, because pi
   needs them. Anything else the agent must not see has to stay out of `~/.pi`,
   the project directory, and the read-only configuration files listed above.

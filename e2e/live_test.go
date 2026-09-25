@@ -102,7 +102,8 @@ var _ = Describe("live gateway smoke tests", Label("live"), Ordered, ContinueOnF
 		session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode=publish", "--"), opts)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(session.Close)
-		command := harness.ShellJoin("git", "-c", "credential.helper=", "push", "origin", "HEAD:refs/heads/"+branch)
+		remote := "https://github.com/" + liveFixture.Repository + ".git"
+		command := harness.ShellJoin("env", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null", "git", "-c", "credential.helper=", "push", remote, "HEAD:refs/heads/"+branch)
 
 		// when
 		result, err := session.Bash(ctx, "!", command)

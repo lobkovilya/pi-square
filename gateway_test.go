@@ -169,7 +169,7 @@ func TestForwardReplacesCredentialAndStripsHeaders(t *testing.T) {
 	if got := rec.lastReq.Header.Get("Accept"); got != "application/vnd.github+json" {
 		t.Errorf("Accept should be preserved, got %q", got)
 	}
-	sanitizeResponseHeaders(resp.Header)
+	sanitizeResponseHeaders(resp.Header, true)
 	if got := resp.Header.Get("Set-Cookie"); got != "" {
 		t.Errorf("response Set-Cookie should be stripped, got %q", got)
 	}

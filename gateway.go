@@ -402,8 +402,9 @@ func (g *gateway) serveTunnel(tlsConn *tls.Conn, class policyClass) {
 			return
 		}
 		resp, keepAlive := g.dispatch(class, req)
-		sanitizeResponseHeaders(resp.Header)
+		sanitizeResponseHeaders(resp.Header, true)
 		resp.Close = !keepAlive
+		resp.Body = &responseDeadlineBody{ReadCloser: resp.Body, conn: tlsConn}
 		tlsConn.SetWriteDeadline(time.Now().Add(gatewayResponse))
 		err = resp.Write(tlsConn)
 		resp.Body.Close()
@@ -455,6 +456,7 @@ func (g *gateway) dispatch(class policyClass, req *http.Request) (*http.Response
 func (g *gateway) forward(class policyClass, req *http.Request, body []byte) (*http.Response, error) {
 	target := *g.upstreamBase
 	target.Path = req.URL.Path
+	target.RawPath = req.URL.RawPath
 	target.RawQuery = req.URL.RawQuery
 
 	upstream, err := http.NewRequest(req.Method, target.String(), bytes.NewReader(body))
@@ -525,10 +527,18 @@ func (g *gateway) log(class policyClass, method, path, decision, code string, st
 // framing headers so the credential the gateway installs is the only one that
 // reaches upstream.
 func cloneAllowedHeaders(src http.Header) http.Header {
+	return cloneForwardHeaders(src, true)
+}
+
+// cloneForwardHeaders can preserve a client's credentials for routes where the
+// gateway does not inject its own credential.
+func cloneForwardHeaders(src http.Header, stripCredentials bool) http.Header {
 	dst := http.Header{}
 	drop := connectionTokens(src)
-	drop["Authorization"] = true
-	drop["Cookie"] = true
+	if stripCredentials {
+		drop["Authorization"] = true
+		drop["Cookie"] = true
+	}
 	drop["Host"] = true
 	drop["Content-Length"] = true
 	for _, h := range hopByHopHeaders {
@@ -545,15 +555,17 @@ func cloneAllowedHeaders(src http.Header) http.Header {
 	return dst
 }
 
-func sanitizeResponseHeaders(header http.Header) {
+func sanitizeResponseHeaders(header http.Header, stripCredentials bool) {
 	for key := range connectionTokens(header) {
 		header.Del(key)
 	}
 	for _, h := range hopByHopHeaders {
 		header.Del(h)
 	}
-	header.Del("Set-Cookie")
-	header.Del("WWW-Authenticate")
+	if stripCredentials {
+		header.Del("Set-Cookie")
+		header.Del("WWW-Authenticate")
+	}
 }
 
 // connectionTokens returns the set of header names named in a Connection header,

@@ -52,16 +52,16 @@ var _ = Describe("sandbox permissions and isolation", func() {
 		// when
 		browse, err := session.Bash(ctx, "!", "if touch probe-file 2>/dev/null; then rm -f probe-file; echo writable; else echo readonly; fi")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(session.Slash(ctx, "/gh-mode local", "GitHub mode: local")).To(Succeed())
+		Expect(session.Slash(ctx, "/gh-mode local", "pi-square: local")).To(Succeed())
 		local, err := session.Bash(ctx, "!!", "if touch probe-file 2>/dev/null; then rm -f probe-file; echo writable; else echo readonly; fi")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(session.Slash(ctx, "/gh-mode browse", "GitHub mode: browse")).To(Succeed())
+		Expect(session.Slash(ctx, "/gh-mode browse", "pi-square: browse")).To(Succeed())
 		browseAgain, err := session.Bash(ctx, "!", "if touch probe-file 2>/dev/null; then rm -f probe-file; echo writable; else echo readonly; fi")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(session.Slash(ctx, "/gh-mode publish", "GitHub mode: publish")).To(Succeed())
+		Expect(session.Slash(ctx, "/gh-mode publish", "pi-square: publish")).To(Succeed())
 		publish, err := session.Bash(ctx, "!!", "if touch probe-file 2>/dev/null; then rm -f probe-file; echo writable; else echo readonly; fi")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(session.Slash(ctx, "/gh-mode toggle", "GitHub mode: browse")).To(Succeed())
+		Expect(session.Slash(ctx, "/gh-mode toggle", "pi-square: browse")).To(Succeed())
 		toggled, err := session.Bash(ctx, "!", "if touch probe-file 2>/dev/null; then rm -f probe-file; echo writable; else echo readonly; fi")
 		Expect(err).NotTo(HaveOccurred())
 
@@ -87,7 +87,7 @@ var _ = Describe("sandbox permissions and isolation", func() {
 		// when
 		running, err := session.StartBash(ctx, "!", "while [ ! -e "+harness.ShellJoin(release)+" ]; do sleep .05; done; if touch probe-file 2>/dev/null; then rm -f probe-file; echo writable; else echo readonly; fi")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(session.Slash(ctx, "/gh-mode local", "GitHub mode: local")).To(Succeed())
+		Expect(session.Slash(ctx, "/gh-mode local", "pi-square: local")).To(Succeed())
 		completedBeforeRelease := running.Completed()
 		// Host-side release is mechanics, not an action under test; pi accepts only
 		// one interactive shell command at a time. The read-only mount observes it.
@@ -197,7 +197,7 @@ var _ = Describe("sandbox permissions and isolation", func() {
 			Expect(push.Status).NotTo(Equal(0))
 			Expect(push.Output).To(ContainSubstring("write_requires_publish: git push requires publish mode"))
 			Expect(screen).NotTo(ContainSubstring("Switch mode to publish"))
-			Expect(session.Slash(ctx, "/gh-mode status", "GitHub mode: "+mode)).To(Succeed())
+			Expect(session.Slash(ctx, "/gh-mode status", "pi-square: "+mode)).To(Succeed())
 			Expect(session.Quit(ctx)).To(Succeed())
 		},
 		Entry("in browse mode", "browse"),
