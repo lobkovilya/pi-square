@@ -9,20 +9,21 @@ const STATE_ENTRY = "gh-mode-state";
 const STATUS_KEY = "gh-mode";
 const DENY_WRITE = "write_requires_publish";
 
-type Access = "off" | "ro" | "rw";
-type Resource = "workdir" | "git" | "githubAPI" | "net";
+type Access = "off" | "on" | "ro" | "rw";
+type Resource = "workdir" | "git" | "githubAPI" | "net" | "bash";
 
-// Presentation only: these values describe the existing overlapping mode gates.
+// These values describe the overlapping mode gates; bash also controls tool activation.
 const RESOURCES: { key: Resource; icon: string }[] = [
 	{ key: "workdir", icon: "" },
 	{ key: "git", icon: "" },
 	{ key: "githubAPI", icon: "" },
 	{ key: "net", icon: "" },
+	{ key: "bash", icon: "" },
 ];
 const MODE_ACCESS: Record<GhMode, Record<Resource, Access>> = {
-	browse: { workdir: "ro", git: "ro", githubAPI: "ro", net: "rw" },
-	local: { workdir: "rw", git: "rw", githubAPI: "ro", net: "rw" },
-	publish: { workdir: "rw", git: "rw", githubAPI: "rw", net: "rw" },
+	browse: { workdir: "ro", git: "ro", githubAPI: "ro", net: "rw", bash: "off" },
+	local: { workdir: "rw", git: "rw", githubAPI: "ro", net: "rw", bash: "on" },
+	publish: { workdir: "rw", git: "rw", githubAPI: "rw", net: "rw", bash: "on" },
 };
 
 // Restore browse or local from the session, but never silently re-enter
@@ -53,6 +54,9 @@ function modePrompt(mode: GhMode): string {
 			: "Local Git changes and remote GitHub writes using the gateway credential are allowed.";
 	return [
 		`GitHub safety mode: ${mode}. ${intent} ${permission}`,
+		mode === "browse"
+			? "The bash tool is unavailable in browse mode. Use available read-only tools for investigation; the user can enable bash with /gh-mode local."
+			: "The bash tool is available; commands run with the current mode's sandbox permissions.",
 		"Shell commands can reach public HTTPS destinations on port 443 only through a mandatory proxy.",
 		"For api.github.com, browse and local permit REST GET/HEAD and GraphQL queries using the gateway credential; for github.com, they permit authenticated Git fetches.",
 		"New commands launched in publish may also use the gateway credential for REST writes, GraphQL mutations, and HTTPS Git pushes.",
@@ -116,8 +120,16 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 		ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg(color, [mode, ...row].join(" · ")));
 	}
 
+	function syncBashAvailability(): void {
+		const active = pi.getActiveTools();
+		const enabled = MODE_ACCESS[mode].bash === "on";
+		if (enabled === active.includes("bash")) return;
+		pi.setActiveTools(enabled ? [...active, "bash"] : active.filter((name) => name !== "bash"));
+	}
+
 	function setMode(next: GhMode, ctx: ExtensionContext, notify = true): void {
 		mode = next;
+		syncBashAvailability();
 		updateStatus(ctx);
 		persistMode();
 		if (notify) ctx.ui.notify(`pi-square: ${mode}`, "info");
@@ -148,7 +160,12 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 	}
 
 	async function routeBash(event: { input: { command?: string }; toolName: string }) {
-		if (event.toolName !== "bash" || typeof event.input.command !== "string") return;
+		if (event.toolName !== "bash") return;
+		// Reject stale calls too, including calls queued before a mode downgrade.
+		if (mode === "browse") {
+			return { block: true, reason: "The bash tool is unavailable in browse mode. Switch to /gh-mode local to enable it." };
+		}
+		if (typeof event.input.command !== "string") return;
 		event.input.command = routeCommand(event.input.command, mode);
 	}
 
@@ -230,6 +247,7 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
 		} else {
 			mode = restoreMode(ctx);
 		}
+		syncBashAvailability();
 		updateStatus(ctx);
 	});
 

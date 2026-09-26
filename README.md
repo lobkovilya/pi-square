@@ -32,27 +32,34 @@ Alt+Super+G to cycle modes.
 | `publish` | writable  | HTTPS; adds gateway-authenticated API writes and Git pushes |
 
 The footer summarizes the mode for **new** commands, in Workdir · Local Git ·
-GitHub API · Net order:
+GitHub API · Net · Bash tool order:
 
 ```text
-browse ·  ro ·  ro ·  ro ·  rw
-local ·  rw ·  rw ·  ro ·  rw
-publish ·  rw ·  rw ·  rw ·  rw
+browse ·  ro ·  ro ·  ro ·  rw ·  off
+local ·  rw ·  rw ·  ro ·  rw ·  on
+publish ·  rw ·  rw ·  rw ·  rw ·  on
 ```
 
-| Mode | Workdir | Local Git | GitHub API | Net |
-|------|---------|-----------|------------|-----|
-| `browse` | RO | RO | RO | RW |
-| `local` | RW | RW | RO | RW |
-| `publish` | RW | RW | RW | RW |
+| Mode | Workdir | Local Git | GitHub API | Net | Bash tool |
+|------|---------|-----------|------------|-----|-----------|
+| `browse` | RO | RO | RO | RW | OFF |
+| `local` | RW | RW | RO | RW | ON |
+| `publish` | RW | RW | RW | RW | ON |
 
 The icons are Nerd Font folder (``), Git branch (``), GitHub (``),
-and globe (``); they require a Nerd Font terminal. `/gh-mode` or
-`/gh-mode status` gives named, font-independent explanations. A plain-text
-rendering of the browse row is `workdir:ro · git:ro · gh-api:ro · net:rw`.
-OFF means no access, RO means read-only within the stated scope, and RW means
-reads and writes within that scope, **not** unrestricted access. No current
-mode has an OFF resource or a separate resource toggle.
+globe (``), and terminal (``, `nf-oct-terminal`); they require a Nerd Font
+terminal. `/gh-mode` or `/gh-mode status` reports the current mode.
+A plain-text rendering of the browse row is
+`workdir:ro · git:ro · gh-api:ro · net:rw · bash:off`.
+OFF means unavailable, ON means available, RO means read-only within the stated
+scope, and RW means reads and writes within that scope, **not** unrestricted
+access. There are no separate resource toggles.
+
+The model's bash tool is disabled in browse and enabled in local/publish. Mode
+changes update Pi's active tools and generated tool instructions; earlier tool
+descriptions and calls can remain in conversation history. A tool-call guard
+also rejects stale bash calls in browse. This does not disable user-entered
+`!` / `!!` commands, which still use the selected mode's sandbox permissions.
 
 Workdir means the exposed project directory, not the entire host filesystem;
 system mounts, private temporary directories, and pi state exceptions are
