@@ -21,9 +21,35 @@ The binary embeds `gh-mode.ts` and loads it only for pi processes launched by
 
 ## Permission model
 
-GitHub operations start in read-only `browse` mode. Use `/gh-mode local` for
-local Git changes and `/gh-mode publish` for remote writes, or press
-Alt+Super+G to cycle modes.
+Without configuration, sessions start in `browse`. Use `/profile local` for
+local changes and `/profile publish` for remote writes, or press Alt+Super+G
+to cycle profiles. `/gh-mode` remains an alias. Any permission increase requires
+confirmation; downgrades do not. Session restoration never increases permissions
+above the configured default; `--profile NAME` explicitly overrides the initial choice.
+
+### User configuration
+
+Configuration is loaded once from `$XDG_CONFIG_HOME/pi-square/config.json`
+(default `~/.config/pi-square/config.json`), or `--config PATH`. No project-local
+configuration is loaded. A missing default file uses built-ins; a missing explicit
+file is an error. Configured profiles replace built-ins, without inheritance.
+
+```json
+{
+  "defaultProfile": "offline",
+  "profiles": {
+    "offline": { "workdir": "rw", "github": "ro", "net": "off", "bash": "on" },
+    "review": { "workdir": "ro", "github": "ro", "net": "on", "bash": "off" }
+  }
+}
+```
+
+Every profile must define `workdir` and `github` (`ro|rw`), plus `net` and `bash`
+(`on|off`). Missing resources, unknown fields (including `version` and `git`),
+invalid values, empty profiles, and unknown defaults fail startup. Names contain
+letters, digits, hyphens or underscores, starting with a letter or digit;
+`status`, `toggle`, and `t` are reserved.
+Use `--profile NAME` (`--gh-mode NAME` alias) to select an initial profile.
 
 | Mode      | Workdir   | Shell network                                                       |
 |-----------|-----------|---------------------------------------------------------------------|
@@ -31,26 +57,26 @@ Alt+Super+G to cycle modes.
 | `local`   | writable  | HTTPS; gateway-authenticated GitHub API reads and Git fetches |
 | `publish` | writable  | HTTPS; adds gateway-authenticated API writes and Git pushes |
 
-The footer summarizes the mode for **new** commands, in Workdir · Local Git ·
-GitHub API · Net · Bash tool order:
+The footer summarizes the profile for **new** commands, in Workdir ·
+GitHub · Net · Bash tool order:
 
 ```text
-browse ·  ro ·  ro ·  ro ·  rw ·  off
-local ·  rw ·  rw ·  ro ·  rw ·  on
-publish ·  rw ·  rw ·  rw ·  rw ·  on
+browse ·  ro ·  ro ·  on ·  off
+local ·  rw ·  ro ·  on ·  on
+publish ·  rw ·  rw ·  on ·  on
 ```
 
-| Mode | Workdir | Local Git | GitHub API | Net | Bash tool |
-|------|---------|-----------|------------|-----|-----------|
-| `browse` | RO | RO | RO | RW | OFF |
-| `local` | RW | RW | RO | RW | ON |
-| `publish` | RW | RW | RW | RW | ON |
+| Profile | Workdir | GitHub | Net | Bash tool |
+|---------|---------|--------|-----|-----------|
+| `browse` | RO | RO | ON | OFF |
+| `local` | RW | RO | ON | ON |
+| `publish` | RW | RW | ON | ON |
 
-The icons are Nerd Font folder (``), Git branch (``), GitHub (``),
+The icons are Nerd Font folder (``), GitHub (``),
 globe (``), and terminal (``, `nf-oct-terminal`); they require a Nerd Font
 terminal. `/gh-mode` or `/gh-mode status` reports the current mode.
 A plain-text rendering of the browse row is
-`workdir:ro · git:ro · gh-api:ro · net:rw · bash:off`.
+`workdir:ro · github:ro · net:on · bash:off`.
 OFF means unavailable, ON means available, RO means read-only within the stated
 scope, and RW means reads and writes within that scope, **not** unrestricted
 access. There are no separate resource toggles.
@@ -76,11 +102,10 @@ credential, but client-supplied credentials pass through; other GitHub hosts use
 raw HTTPS tunnels. Independently available credentials are outside the
 gateway-credential guarantee.
 
-Net means other public HTTPS traffic through the mandatory gateway, including
-non-API GitHub hosts. RW allows requests beyond reads, not arbitrary network
-access. The indicators overlap (Git uses files; GitHub uses networking); they
-summarize mode effects, not independently selectable grants. They describe
-sandboxed commands, not pi's provider connection or in-process extensions.
+`net: on` permits public HTTPS traffic through the mandatory gateway.
+`net: off` uses an isolated network namespace without a proxy, blocking all
+command networking including GitHub, regardless of `github` access. Pi's provider
+connection and in-process extensions are unaffected.
 
 GitHub authentication is not the read boundary. The gateway enforces which
 operations may use its credential before forwarding them upstream, so a
@@ -114,8 +139,9 @@ not grant write access to commands that already started in a read-only mode; a
 denied request stays denied, so the agent must launch a new command after the
 mode changes.
 
-When a model bash command is denied because it performs a write, `gh-mode` offers to
-switch to `publish` or keep the current mode. Accepting the switch does not
+When a model bash command is denied because it performs a GitHub write, the
+extension offers configured profiles with GitHub write access, networking and bash,
+or lets the user keep the current profile. Accepting the switch does not
 replay the command; the agent launches it again. Interactive `! command` and
 `!! command` use the same sandbox and launch-time permissions. After a denial,
 switch explicitly with `/gh-mode publish` and rerun the interactive command.

@@ -11,6 +11,7 @@ import (
 )
 
 func TestRunCLI(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	for _, tt := range []struct {
 		name         string
 		args         []string
@@ -45,7 +46,7 @@ func TestRunCLI(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var out bytes.Buffer
 			launched := false
-			err := runCLI(tt.args, &out, func(args []string, devMode bool, ghMode, gateway string, explicit bool) error {
+			err := runCLI(tt.args, &out, func(args []string, devMode bool, ghMode, gateway string, explicit bool, _ configuration) error {
 				launched = true
 				if !reflect.DeepEqual(args, tt.wantArgs) {
 					t.Errorf("args = %#v, want %#v", args, tt.wantArgs)
@@ -83,7 +84,7 @@ func TestRunCLI(t *testing.T) {
 
 func TestRunCLILaunchError(t *testing.T) {
 	want := errors.New("launch failed")
-	err := runCLI(nil, &bytes.Buffer{}, func([]string, bool, string, string, bool) error { return want })
+	err := runCLI(nil, &bytes.Buffer{}, func([]string, bool, string, string, bool, configuration) error { return want })
 	if !errors.Is(err, want) {
 		t.Fatalf("error = %v, want %v", err, want)
 	}

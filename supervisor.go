@@ -22,9 +22,10 @@ import (
 // secrets travel from the host launcher to the supervisor over an inherited
 // pipe so they never appear in any environment or argument list.
 type secrets struct {
-	GatewayCA   string   `json:"gateway_ca"`
-	WToken      string   `json:"w_token"`
-	GitIdentity []string `json:"git_identity"`
+	Config      configuration `json:"config"`
+	GatewayCA   string        `json:"gateway_ca"`
+	WToken      string        `json:"w_token"`
+	GitIdentity []string      `json:"git_identity"`
 }
 
 // launchRequest is what the stub asks the supervisor to run. The supervisor
@@ -162,6 +163,9 @@ func (s *supervisor) start() error {
 	if err := s.startWorker(classW, wSocket); err != nil {
 		return err
 	}
+	if err := s.startWorker(classOffline, "offline"); err != nil {
+		return err
+	}
 	return s.listenControl()
 }
 
@@ -237,12 +241,13 @@ func (s *supervisor) handleControl(conn *net.UnixConn) {
 		return
 	}
 
-	class, readonlyWorkdir, throwawayHome, ok := deriveMode(req.Mode)
+	p, ok := s.secrets.Config.Profiles[req.Mode]
+	class, readonlyWorkdir, throwawayHome := p.commandPolicy()
 	if !ok {
 		s.reply(conn, launchResponse{Code: denyUnsupportedRequest, Message: "unknown launch mode"})
 		return
 	}
-	if class == classW && req.WToken != s.secrets.WToken {
+	if p.GitHub == "rw" && req.WToken != s.secrets.WToken {
 		s.reply(conn, launchResponse{Code: denyWriteRequiresPublish, Message: "publish is required to run write-enabled commands"})
 		return
 	}
@@ -327,6 +332,11 @@ func (s *supervisor) runPi(args []string) error {
 	// extension and stub need. The supervisor keeps its own secrets out of pi.
 	env := stripSupervisorEnv(sanitizeParentEnv(os.Environ()))
 	env = setEnv(env, "PI_SQUARE_ACTIVE", "1")
+	configJSON, err := json.Marshal(s.secrets.Config)
+	if err != nil {
+		return err
+	}
+	env = setEnv(env, "PI_SQUARE_CONFIG", string(configJSON))
 	env = setEnv(env, "PI_SQUARE_GH_HELPER", helperPath)
 	env = setEnv(env, "PI_SQUARE_WTOKEN", s.secrets.WToken)
 	if s.devMode {
@@ -445,15 +455,9 @@ func readSecrets() (secrets, error) {
 }
 
 func deriveMode(mode string) (class policyClass, readonlyWorkdir, throwawayHome, ok bool) {
-	switch mode {
-	case "browse":
-		return classRO, true, true, true
-	case "local":
-		return classRO, false, true, true
-	case "publish":
-		return classW, false, false, true
-	}
-	return "", false, false, false
+	p, ok := builtinConfiguration().Profiles[mode]
+	class, readonlyWorkdir, throwawayHome = p.commandPolicy()
+	return class, readonlyWorkdir, throwawayHome, ok
 }
 
 func recvRequest(conn *net.UnixConn) (launchRequest, []*os.File, error) {

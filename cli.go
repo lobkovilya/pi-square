@@ -34,7 +34,7 @@ func buildVersion() string {
 	return prefix + "unknown"
 }
 
-func runCLI(args []string, out io.Writer, launch func([]string, bool, string, string, bool) error) error {
+func runCLI(args []string, out io.Writer, launch func([]string, bool, string, string, bool, configuration) error) error {
 	if len(args) > 0 && args[0] == "gateway" {
 		if len(args) < 2 {
 			return fmt.Errorf("usage: pi-square gateway list | start NAME | stop NAME [--force]")
@@ -79,7 +79,9 @@ func runCLI(args []string, out io.Writer, launch func([]string, bool, string, st
 	showHelp := flags.Bool("help", false, "Show help")
 	flags.BoolVar(showHelp, "h", false, "Show help")
 	mode := flags.String("mode", "", "Wrapper mode (dev disables GitHub mode prompt guidance)")
-	ghMode := flags.String("gh-mode", "", "Initial GitHub mode (browse, local, or publish)")
+	ghMode := flags.String("gh-mode", "", "Compatibility alias for --profile")
+	profile := flags.String("profile", "", "Initial permission profile")
+	configPath := flags.String("config", "", "Configuration file")
 	gateway := flags.String("gateway", "", "Attach to an existing named gateway")
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("%v; pass pi arguments after --", err)
@@ -90,23 +92,36 @@ func runCLI(args []string, out io.Writer, launch func([]string, bool, string, st
 	if *mode != "" && *mode != "dev" {
 		return fmt.Errorf("unsupported mode %q; expected dev", *mode)
 	}
-	if *ghMode != "" && *ghMode != "browse" && *ghMode != "local" && *ghMode != "publish" {
-		return fmt.Errorf("unsupported GitHub mode %q; expected browse, local, or publish", *ghMode)
-	}
 	if *gateway != "" && !instanceName.MatchString(*gateway) {
 		return fmt.Errorf("invalid gateway name %q", *gateway)
 	}
 	if *showHelp {
-		_, err := fmt.Fprint(out, "Usage: pi-square [options] [-- pi arguments...]\n       pi-square gateway list | start NAME | stop NAME [--force]\n\nOptions:\n  --mode=dev            Disable GitHub mode prompt guidance (sandbox remains active)\n  --gh-mode=MODE        Initial GitHub mode: browse, local, or publish\n  --gateway=NAME        Attach to an existing gateway\n  --version             Show pi-square version\n  --help, -h            Show help\n\nPass arguments to pi after --, e.g. pi-square -- --version.\n")
+		_, err := fmt.Fprint(out, "Usage: pi-square [options] [-- pi arguments...]\n       pi-square gateway list | start NAME | stop NAME [--force]\n\nOptions:\n  --mode=dev            Disable GitHub mode prompt guidance (sandbox remains active)\n  --config=PATH        Configuration file\n  --profile=NAME       Initial permission profile\n  --gh-mode=NAME       Compatibility alias for --profile\n  --gateway=NAME        Attach to an existing gateway\n  --version             Show pi-square version\n  --help, -h            Show help\n\nPass arguments to pi after --, e.g. pi-square -- --version.\n")
 		return err
 	}
 	if *showVersion {
 		_, err := fmt.Fprintln(out, "pi-square", version)
 		return err
 	}
+	c, err := loadConfiguration(*configPath)
+	if err != nil {
+		return err
+	}
+	if *profile != "" && *ghMode != "" && *profile != *ghMode {
+		return fmt.Errorf("--profile and --gh-mode disagree")
+	}
+	selected := *profile
+	if selected == "" {
+		selected = *ghMode
+	}
+	if selected != "" {
+		if _, ok := c.Profiles[selected]; !ok {
+			return fmt.Errorf("unknown profile %q", selected)
+		}
+	}
 	name := *gateway
 	if name == "" {
 		name = "default"
 	}
-	return launch(piArgs, *mode == "dev", *ghMode, name, *gateway != "")
+	return launch(piArgs, *mode == "dev", selected, name, *gateway != "", c)
 }

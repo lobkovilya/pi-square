@@ -64,7 +64,7 @@ func fatal(err error) {
 	os.Exit(1)
 }
 
-func run(args []string, devMode bool, initialGHMode, gatewayName string, explicitGateway bool) error {
+func run(args []string, devMode bool, initialGHMode, gatewayName string, explicitGateway bool, config configuration) error {
 	workdir, err := filepath.EvalSymlinks(mustAbs("."))
 	if err != nil {
 		return fmt.Errorf("resolve workdir: %w", err)
@@ -164,6 +164,7 @@ func run(args []string, devMode bool, initialGHMode, gatewayName string, explici
 		GatewayCA:   caPEM,
 		WToken:      wToken,
 		GitIdentity: hostGitIdentity(),
+		Config:      config,
 	})
 	if err != nil {
 		secretsWriter.Close()
