@@ -22,7 +22,7 @@ func runStub(args []string) error {
 	if len(args) != 2 {
 		return errors.New("invalid stub invocation")
 	}
-	mode := args[0]
+	profile := args[0]
 	command, err := decode(args[1])
 	if err != nil {
 		return err
@@ -33,7 +33,7 @@ func runStub(args []string) error {
 	}
 
 	req := launchRequest{
-		Mode:    mode,
+		Profile: profile,
 		Cwd:     cwd,
 		Command: command,
 		WToken:  os.Getenv("PI_SQUARE_WTOKEN"),

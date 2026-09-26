@@ -111,7 +111,7 @@ func TestGitReceivePackAdvertisementDenial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.StatusCode != http.StatusForbidden || !bytes.Contains(payload, []byte("write_requires_publish: git push requires publish mode\n")) {
+	if resp.StatusCode != http.StatusForbidden || !bytes.Contains(payload, []byte("write_requires_publish: git push requires publish profile\n")) {
 		t.Fatalf("denial status = %d, body = %q", resp.StatusCode, payload)
 	}
 	if upstream.lastReq != nil {

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -51,6 +52,14 @@ func loopbackUp() error {
 func runFrontend(gatewaySocket string) error {
 	if err := loopbackUp(); err != nil {
 		return fmt.Errorf("bring up loopback: %w", err)
+	}
+	if gatewaySocket == "offline" {
+		ready := os.NewFile(readyFD, "ready")
+		ready.Write([]byte{'1'})
+		ready.Close()
+		for {
+			time.Sleep(time.Hour)
+		}
 	}
 	listener, err := net.Listen("tcp", frontendListen)
 	if err != nil {

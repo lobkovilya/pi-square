@@ -7,7 +7,7 @@ import (
 
 // ProcessResult keeps command output separate from harness diagnostics.
 type ProcessResult struct {
-	Mode      string
+	Profile   string
 	Command   string
 	Status    int
 	Signal    string
@@ -19,8 +19,8 @@ type ProcessResult struct {
 }
 
 func FormatResult(r ProcessResult) string {
-	return Redact(fmt.Sprintf("mode=%s status=%d signal=%s elapsed=%s timedOut=%t completed=%t\ncommand=%s\noutput:\n%s\nstderr:\n%s",
-		r.Mode, r.Status, r.Signal, r.Elapsed, r.TimedOut, r.Completed, r.Command, r.Output, r.Stderr))
+	return Redact(fmt.Sprintf("profile=%s status=%d signal=%s elapsed=%s timedOut=%t completed=%t\ncommand=%s\noutput:\n%s\nstderr:\n%s",
+		r.Profile, r.Status, r.Signal, r.Elapsed, r.TimedOut, r.Completed, r.Command, r.Output, r.Stderr))
 }
 
 func RequireSuccess(label string, r ProcessResult) error {
