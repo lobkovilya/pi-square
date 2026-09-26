@@ -91,7 +91,7 @@ test("initial and restored modes set availability", async () => {
 	}
 });
 
-test("custom profiles control independent resources and require escalation confirmation", async () => {
+test("custom profiles control independent resources and switch immediately", async () => {
  const config = { defaultProfile: "offline", profiles: {
   offline: { workdir: "rw", github: "ro", net: "off", bash: "on" },
   review: { workdir: "ro", github: "ro", net: "on", bash: "off" },
@@ -100,12 +100,13 @@ test("custom profiles control independent resources and require escalation confi
  await app.emit("session_start");
  assert.match(app.status(), /offline.* off.* on/);
  await app.mode("review");
- assert.match(app.status(), /^offline/); // Network increase was declined.
+ assert.match(app.status(), /^review.* on.* off/);
  const event = { toolName: "bash", input: { command: "echo ok" } };
- await app.emit("tool_call", event);
- assert.match(event.input.command, /--pi-square-stub 'offline'/);
+ const result = await app.emit("tool_call", event);
+ assert.equal(result.block, true);
+ assert.equal(event.input.command, "echo ok");
  const prompt = await app.emit("before_agent_start", { systemPrompt: "base" });
- assert.match(prompt.systemPrompt, /no network access/);
+ assert.match(prompt.systemPrompt, /mandatory proxy/);
 });
 
 test("read-only custom profiles block writes without confirmation", async () => {

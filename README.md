@@ -23,9 +23,9 @@ The binary embeds `gh-mode.ts` and loads it only for pi processes launched by
 
 Without configuration, sessions start in `browse`. Use `/profile local` for
 local changes and `/profile publish` for remote writes, or press Alt+Super+G
-to cycle profiles. `/gh-mode` remains an alias. Any permission increase requires
-confirmation; downgrades do not. Session restoration never increases permissions
-above the configured default; `--profile NAME` explicitly overrides the initial choice.
+to cycle profiles. `/gh-mode` remains an alias. Profile switches take effect
+immediately. Session restoration never increases permissions above the configured
+default; `--profile NAME` explicitly overrides the initial choice.
 
 ### User configuration
 

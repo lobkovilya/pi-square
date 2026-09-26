@@ -48,14 +48,7 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
  function setMode(next: string, ctx: ExtensionContext): void {
   mode = next; update(ctx); pi.appendEntry("gh-mode-state", { mode }); ctx.ui.notify(`pi-square: ${mode}`, "info");
  }
- async function switchMode(next: string, ctx: ExtensionContext): Promise<boolean> {
-  const previous = mode;
-  if (increases(previous, next)) {
-   if (!ctx.hasUI) return false;
-   const details = RESOURCES.map(k => `${k}: ${profiles[previous][k]} → ${profiles[next][k]}`).join(", ");
-   if (await ctx.ui.select(`Switch profile to ${next}? ${details}`, ["Switch", "Keep existing"]) !== "Switch") return false;
-   if (mode !== previous) return false;
-  }
+ function switchMode(next: string, ctx: ExtensionContext): boolean {
   setMode(next, ctx); return true;
  }
  async function suggest(key: "workdir" | "github", ctx: ExtensionContext): Promise<boolean> {
@@ -124,7 +117,7 @@ export default function ghModeExtension(pi: ExtensionAPI): void {
    p.net === "off" ? "Sandboxed commands have no network access, including GitHub. Pi's provider connection is unaffected." : "Commands reach public HTTPS on port 443 only via the mandatory proxy; direct networking, HTTP, SSH and proxy bypass are blocked.",
    "The github permission governs gateway-authenticated API and remote Git operations: ro permits REST GET/HEAD, GraphQL queries and Git fetch; rw also permits REST writes, mutations and pushes. Other public HTTPS hosts are raw TLS tunnels; independently available credentials are outside this guarantee.",
    "Local Git follows filesystem permissions; there is no independent Git metadata protection. Permissions stay fixed for each command's lifetime. bash controls the model tool, not user !/!! commands.",
-   "Use /profile (or /gh-mode) to switch. Permission increases require confirmation. Only attempt a blocked GitHub write when publication was explicitly requested; do not repeat it if the user keeps the profile.",
+   "Use /profile (or /gh-mode) to switch immediately. Only attempt a blocked GitHub write when publication was explicitly requested; do not repeat it if the user keeps the profile.",
   ].join(" ");
   return { systemPrompt: `${event.systemPrompt}\n\n${prompt}` };
  });
