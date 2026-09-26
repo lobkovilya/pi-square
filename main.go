@@ -21,8 +21,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-//go:embed gh-mode.ts
-var ghModeExtension []byte
+//go:embed permission-profile.ts
+var permissionProfileExtension []byte
 
 type slot struct {
 	dir  string
@@ -64,7 +64,7 @@ func fatal(err error) {
 	os.Exit(1)
 }
 
-func run(args []string, devMode bool, initialGHMode, gatewayName string, explicitGateway bool, config configuration) error {
+func run(args []string, devMode bool, initialProfile, gatewayName string, explicitGateway bool, config configuration) error {
 	workdir, err := filepath.EvalSymlinks(mustAbs("."))
 	if err != nil {
 		return fmt.Errorf("resolve workdir: %w", err)
@@ -134,7 +134,7 @@ func run(args []string, devMode bool, initialGHMode, gatewayName string, explici
 		"PI_SQUARE_FFF":             s.dir,
 		"PI_SQUARE_HOST_UID":        strconv.Itoa(os.Getuid()),
 		"PI_SQUARE_DEV_MODE":        devModeValue,
-		"PI_SQUARE_INITIAL_GH_MODE": initialGHMode,
+		"PI_SQUARE_INITIAL_PROFILE": initialProfile,
 		"PI_SQUARE_GATEWAY_DIR":     paths.dir,
 	} {
 		env = setEnv(env, key, value)

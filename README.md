@@ -16,18 +16,29 @@ credentials never enter the sandbox: the gateway holds the host `gh`
 credential and adds it to approved requests itself. `/tmp` and
 `$XDG_RUNTIME_DIR` are private temporary filesystems.
 
-The binary embeds `gh-mode.ts` and loads it only for pi processes launched by
+The binary embeds `permission-profile.ts` and loads it only for pi processes launched by
 `pi-square`; no separate extension installation is needed.
 
 ## Permission model
 
-Without configuration, sessions start in `browse`. Use `/profile local` for
-local changes and `/profile publish` for remote writes, or press Alt+Super+G
-to cycle profiles. `/gh-mode` remains an alias. Profile switches take effect
+Without configuration, sessions start in `browse`. Use `/pi-square-profile local` for
+local changes and `/pi-square-profile publish` for remote writes, or press Alt+Super+G
+to cycle profiles. Profile switches take effect
 immediately. Session restoration never increases permissions above the configured
 default; `--profile NAME` explicitly overrides the initial choice.
 
 ### User configuration
+
+`pi-square config default` prints the complete built-in configuration as formatted
+JSON to stdout, without loading your configuration or launching Pi. To save it:
+
+```sh
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/pi-square"
+mkdir -p "$config_dir"
+pi-square config default > "$config_dir/config.json"
+```
+
+Shell redirection overwrites an existing file.
 
 Configuration is loaded once from `$XDG_CONFIG_HOME/pi-square/config.json`
 (default `~/.config/pi-square/config.json`), or `--config PATH`. No project-local
@@ -49,9 +60,9 @@ Every profile must define `workdir` and `github` (`ro|rw`), plus `net` and `bash
 invalid values, empty profiles, and unknown defaults fail startup. Names contain
 letters, digits, hyphens or underscores, starting with a letter or digit;
 `status`, `toggle`, and `t` are reserved.
-Use `--profile NAME` (`--gh-mode NAME` alias) to select an initial profile.
+Use `--profile NAME` to select an initial profile.
 
-| Mode      | Workdir   | Shell network                                                       |
+| Profile   | Workdir   | Shell network                                                       |
 |-----------|-----------|---------------------------------------------------------------------|
 | `browse`  | read-only | HTTPS; gateway-authenticated GitHub API reads and Git fetches |
 | `local`   | writable  | HTTPS; gateway-authenticated GitHub API reads and Git fetches |
@@ -74,18 +85,18 @@ publish ·  rw ·  rw ·  on ·  on
 
 The icons are Nerd Font folder (``), GitHub (``),
 globe (``), and terminal (``, `nf-oct-terminal`); they require a Nerd Font
-terminal. `/gh-mode` or `/gh-mode status` reports the current mode.
+terminal. `/pi-square-profile` or `/pi-square-profile status` reports the current profile.
 A plain-text rendering of the browse row is
 `workdir:ro · github:ro · net:on · bash:off`.
 OFF means unavailable, ON means available, RO means read-only within the stated
 scope, and RW means reads and writes within that scope, **not** unrestricted
 access. There are no separate resource toggles.
 
-The model's bash tool is disabled in browse and enabled in local/publish. Mode
+The model's bash tool is disabled in browse and enabled in local/publish. Profile
 changes update Pi's active tools and generated tool instructions; earlier tool
 descriptions and calls can remain in conversation history. A tool-call guard
 also rejects stale bash calls in browse. This does not disable user-entered
-`!` / `!!` commands, which still use the selected mode's sandbox permissions.
+`!` / `!!` commands, which still use the selected profile's sandbox permissions.
 
 Workdir means the exposed project directory, not the entire host filesystem;
 system mounts, private temporary directories, and pi state exceptions are
@@ -109,7 +120,7 @@ connection and in-process extensions are unaffected.
 
 GitHub authentication is not the read boundary. The gateway enforces which
 operations may use its credential before forwarding them upstream, so a
-read-only mode cannot use that credential for writes regardless of its scopes.
+read-only profile cannot use that credential for writes regardless of its scopes.
 This guarantee does not cover credentials independently available to a command.
 
 HTTPS on port 443 is reachable only through the gateway. For
@@ -135,21 +146,21 @@ Permissions are assigned when a command launches and stay fixed for its
 lifetime. Switching away from `publish` affects future commands only:
 write-enabled commands that are already running, including background
 descendants, keep write access until they exit. Switching into `publish` does
-not grant write access to commands that already started in a read-only mode; a
+not grant write access to commands that already started in a read-only profile; a
 denied request stays denied, so the agent must launch a new command after the
-mode changes.
+profile changes.
 
 When a model bash command is denied because it performs a GitHub write, the
 extension offers configured profiles with GitHub write access, networking and bash,
 or lets the user keep the current profile. Accepting the switch does not
 replay the command; the agent launches it again. Interactive `! command` and
 `!! command` use the same sandbox and launch-time permissions. After a denial,
-switch explicitly with `/gh-mode publish` and rerun the interactive command.
+switch explicitly with `/pi-square-profile publish` and rerun the interactive command.
 
 ## Trust boundary
 
 Pi and the bundled extension are trusted and keep normal host networking so pi
-can reach its model provider. Every shell command, in every mode, runs through
+can reach its model provider. Every shell command, in every profile, runs through
 the isolated command runner and can reach nothing but the gateway.
 
 A shared host-user gateway owns the credential and CA; each trusted supervisor
@@ -223,8 +234,8 @@ pi-square [options] [-- pi arguments...]
 
 pi-square --version       # pi-square version
 pi-square --help          # pi-square help
-pi-square --mode=dev      # sandbox normally, without GitHub mode prompt guidance
-pi-square --gh-mode=local # explicitly select the initial GitHub mode
+pi-square --mode=dev      # sandbox normally, without permission profile prompt guidance
+pi-square --profile=local # explicitly select the initial permission profile
 pi-square --gateway=team  # attach to an existing named instance
 pi-square gateway list    # show running health, stopped state, and live session count
 pi-square gateway start team
@@ -251,7 +262,7 @@ upgrading.
 
 All pi arguments (including prompts) must follow `--`. Running `pi-square`
 without arguments starts pi normally. `--mode=dev` keeps the sandbox and
-GitHub-mode enforcement active but omits mode information from the model's
+permission profile enforcement active but omits profile information from the model's
 system prompt. Versions use `0.0.0-preview.v<shortCommitHash>` for both Nix and
 local `go build` builds. Override the version with
 `go build -ldflags "-X main.version=VERSION" -o pi-square .`.

@@ -25,10 +25,10 @@ type Fixture struct {
 }
 
 type SessionOptions struct {
-	Cwd, Mode, Guard string
-	Env              []string
-	Timeout          time.Duration
-	Cleanup          func()
+	Cwd, Profile, Guard string
+	Env                 []string
+	Timeout             time.Duration
+	Cleanup             func()
 }
 
 func ProjectRoot() (string, error) {
@@ -136,16 +136,16 @@ func (f *Fixture) Environment(token string) []string {
 }
 
 // SessionOptions is the sandbox configuration: fake host token, scratch workdir.
-func (f *Fixture) SessionOptions(mode string) (SessionOptions, error) {
-	return f.SessionOptionsAt(mode, "", f.Workdir)
+func (f *Fixture) SessionOptions(profile string) (SessionOptions, error) {
+	return f.SessionOptionsAt(profile, "", f.Workdir)
 }
 
 // SessionOptions is the live configuration: real token, fixture checkout.
-func (f *LiveFixture) SessionOptions(mode string) (SessionOptions, error) {
-	return f.Fixture.SessionOptionsAt(mode, f.Token, f.Checkout)
+func (f *LiveFixture) SessionOptions(profile string) (SessionOptions, error) {
+	return f.Fixture.SessionOptionsAt(profile, f.Token, f.Checkout)
 }
 
-func (f *Fixture) SessionOptionsAt(mode string, token string, cwd string) (SessionOptions, error) {
+func (f *Fixture) SessionOptionsAt(profile string, token string, cwd string) (SessionOptions, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return SessionOptions{}, err
@@ -171,13 +171,13 @@ func (f *Fixture) SessionOptionsAt(mode string, token string, cwd string) (Sessi
 		return fail(err)
 	}
 	env := append(f.Environment(token), "PI_CODING_AGENT_DIR="+agent)
-	return SessionOptions{Cwd: cwd, Mode: mode, Guard: guard, Env: env, Cleanup: func() { _ = os.RemoveAll(agent) }}, nil
+	return SessionOptions{Cwd: cwd, Profile: profile, Guard: guard, Env: env, Cleanup: func() { _ = os.RemoveAll(agent) }}, nil
 }
 
-func (f *Fixture) Command(mode *string) *exec.Cmd {
+func (f *Fixture) Command(profile *string) *exec.Cmd {
 	args := []string{}
-	if mode != nil {
-		args = append(args, "--gh-mode="+*mode)
+	if profile != nil {
+		args = append(args, "--profile="+*profile)
 	}
 	args = append(args, "--")
 	return exec.Command(f.Binary, args...)

@@ -29,7 +29,7 @@ const (
 const (
 	runtimeDir    = "/run/pi-square"
 	helperPath    = "/run/pi-square/pi-square"
-	extensionPath = "/run/pi-square/gh-mode.ts"
+	extensionPath = "/run/pi-square/permission-profile.ts"
 	gatewayDir    = "/run/pi-square/gateway"
 	roSocket      = "/run/pi-square/gateway/ro.sock"
 	wSocket       = "/run/pi-square/gateway/w.sock"

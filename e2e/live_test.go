@@ -38,20 +38,20 @@ var _ = Describe("live gateway smoke tests", Label("live"), Ordered, ContinueOnF
 	})
 
 	DescribeTable("runs gh issue create",
-		func(ctx SpecContext, mode string, allowed bool) {
+		func(ctx SpecContext, profile string, allowed bool) {
 			// given
 			started := time.Now()
-			id := unique("pi-square-e2e-issue-" + mode + "-")
+			id := unique("pi-square-e2e-issue-" + profile + "-")
 			title := "[" + id + "] live gateway smoke test"
-			body := "Append-only live test artifact. Identifier: " + id + ". Mode: " + mode + "."
+			body := "Append-only live test artifact. Identifier: " + id + ". Profile: " + profile + "."
 			host, cancel := bounded(ctx, 60*time.Second)
 			defer cancel()
 			before, err := liveFixture.FindIssues(host, id, started)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(before).To(BeEmpty())
-			opts, err := liveFixture.SessionOptions(mode)
+			opts, err := liveFixture.SessionOptions(profile)
 			Expect(err).NotTo(HaveOccurred())
-			session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode="+mode, "--"), opts)
+			session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--profile="+profile, "--"), opts)
 			Expect(err).NotTo(HaveOccurred())
 			DeferCleanup(session.Close)
 			command := harness.ShellJoin("gh", "issue", "create", "--repo", liveFixture.Repository, "--title", title, "--body", body)
@@ -89,17 +89,17 @@ var _ = Describe("live gateway smoke tests", Label("live"), Ordered, ContinueOnF
 				GinkgoWriter.Printf("Retained append-only issue: %s\n", urls[0])
 			}
 		},
-		Entry("in browse mode", "browse", false),
-		Entry("in local mode", "local", false),
-		Entry("in publish mode", "publish", true),
+		Entry("in browse profile", "browse", false),
+		Entry("in local profile", "local", false),
+		Entry("in publish profile", "publish", true),
 	)
 
-	It("pushes a throwaway branch in publish mode", func(ctx SpecContext) {
+	It("pushes a throwaway branch in publish profile", func(ctx SpecContext) {
 		// given
 		branch := unique("pi-square-e2e-push-")
 		opts, err := liveFixture.SessionOptions("publish")
 		Expect(err).NotTo(HaveOccurred())
-		session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode=publish", "--"), opts)
+		session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--profile=publish", "--"), opts)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(session.Close)
 		remote := "https://github.com/" + liveFixture.Repository + ".git"
@@ -123,13 +123,13 @@ var _ = Describe("live gateway smoke tests", Label("live"), Ordered, ContinueOnF
 	})
 
 	DescribeTable("runs curl to public HTTPS",
-		func(ctx SpecContext, mode string) {
+		func(ctx SpecContext, profile string) {
 			// given
-			id := unique("pi-square-e2e-http-" + mode + "-")
+			id := unique("pi-square-e2e-http-" + profile + "-")
 			target := "https://httpbin.org/get?pi_square_id=" + url.QueryEscape(id)
-			opts, err := liveFixture.SessionOptions(mode)
+			opts, err := liveFixture.SessionOptions(profile)
 			Expect(err).NotTo(HaveOccurred())
-			session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode="+mode, "--"), opts)
+			session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--profile="+profile, "--"), opts)
 			Expect(err).NotTo(HaveOccurred())
 			DeferCleanup(session.Close)
 			command := harness.ShellJoin("curl", "--connect-timeout", "10", "--max-time", "30", "--fail-with-body", "--silent", "--show-error", target, "--write-out", "\n__PI_SQUARE_HTTP_STATUS__:%{http_code}\n")
@@ -155,8 +155,8 @@ var _ = Describe("live gateway smoke tests", Label("live"), Ordered, ContinueOnF
 			Expect(json.Unmarshal([]byte(strings.TrimSpace(output[start:marker])), &response)).To(Succeed(), "%s", diagnostic)
 			Expect(response.Args.ID).To(Equal(id))
 		},
-		Entry("in browse mode", "browse"),
-		Entry("in local mode", "local"),
-		Entry("in publish mode", "publish"),
+		Entry("in browse profile", "browse"),
+		Entry("in local profile", "local"),
+		Entry("in publish profile", "publish"),
 	)
 })

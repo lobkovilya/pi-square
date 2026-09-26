@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -35,6 +36,14 @@ func buildVersion() string {
 }
 
 func runCLI(args []string, out io.Writer, launch func([]string, bool, string, string, bool, configuration) error) error {
+	if len(args) > 0 && args[0] == "config" {
+		if len(args) != 2 || args[1] != "default" {
+			return fmt.Errorf("usage: pi-square config default")
+		}
+		encoder := json.NewEncoder(out)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(builtinConfiguration())
+	}
 	if len(args) > 0 && args[0] == "gateway" {
 		if len(args) < 2 {
 			return fmt.Errorf("usage: pi-square gateway list | start NAME | stop NAME [--force]")
@@ -78,8 +87,7 @@ func runCLI(args []string, out io.Writer, launch func([]string, bool, string, st
 	showVersion := flags.Bool("version", false, "Show pi-square version")
 	showHelp := flags.Bool("help", false, "Show help")
 	flags.BoolVar(showHelp, "h", false, "Show help")
-	mode := flags.String("mode", "", "Wrapper mode (dev disables GitHub mode prompt guidance)")
-	ghMode := flags.String("gh-mode", "", "Compatibility alias for --profile")
+	mode := flags.String("mode", "", "Wrapper mode (dev disables permission profile prompt guidance)")
 	profile := flags.String("profile", "", "Initial permission profile")
 	configPath := flags.String("config", "", "Configuration file")
 	gateway := flags.String("gateway", "", "Attach to an existing named gateway")
@@ -96,7 +104,7 @@ func runCLI(args []string, out io.Writer, launch func([]string, bool, string, st
 		return fmt.Errorf("invalid gateway name %q", *gateway)
 	}
 	if *showHelp {
-		_, err := fmt.Fprint(out, "Usage: pi-square [options] [-- pi arguments...]\n       pi-square gateway list | start NAME | stop NAME [--force]\n\nOptions:\n  --mode=dev            Disable GitHub mode prompt guidance (sandbox remains active)\n  --config=PATH        Configuration file\n  --profile=NAME       Initial permission profile\n  --gh-mode=NAME       Compatibility alias for --profile\n  --gateway=NAME        Attach to an existing gateway\n  --version             Show pi-square version\n  --help, -h            Show help\n\nPass arguments to pi after --, e.g. pi-square -- --version.\n")
+		_, err := fmt.Fprint(out, "Usage: pi-square [options] [-- pi arguments...]\n       pi-square config default\n       pi-square gateway list | start NAME | stop NAME [--force]\n\nOptions:\n  --mode=dev            Disable permission profile prompt guidance (sandbox remains active)\n  --config=PATH        Configuration file\n  --profile=NAME       Initial permission profile\n  --gateway=NAME        Attach to an existing gateway\n  --version             Show pi-square version\n  --help, -h            Show help\n\nPass arguments to pi after --, e.g. pi-square -- --version.\n")
 		return err
 	}
 	if *showVersion {
@@ -107,13 +115,7 @@ func runCLI(args []string, out io.Writer, launch func([]string, bool, string, st
 	if err != nil {
 		return err
 	}
-	if *profile != "" && *ghMode != "" && *profile != *ghMode {
-		return fmt.Errorf("--profile and --gh-mode disagree")
-	}
 	selected := *profile
-	if selected == "" {
-		selected = *ghMode
-	}
 	if selected != "" {
 		if _, ok := c.Profiles[selected]; !ok {
 			return fmt.Errorf("unknown profile %q", selected)

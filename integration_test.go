@@ -44,11 +44,11 @@ func TestIntegration(t *testing.T) {
 		os.RemoveAll(runtimeDir)
 	})
 
-	selftest := func(t *testing.T, mode, command string) (string, int) {
+	selftest := func(t *testing.T, profile, command string) (string, int) {
 		t.Helper()
 		cmd := exec.Command(bin)
 		cmd.Env = append(env,
-			"PI_SQUARE_SELFTEST_MODE="+mode,
+			"PI_SQUARE_SELFTEST_PROFILE="+profile,
 			"PI_SQUARE_SELFTEST_CMD="+command,
 		)
 		out, err := cmd.CombinedOutput()
@@ -61,7 +61,7 @@ func TestIntegration(t *testing.T) {
 
 	cases := []struct {
 		name       string
-		mode       string
+		profile    string
 		command    string
 		wantSubstr string
 		wantAbsent string
@@ -80,7 +80,7 @@ func TestIntegration(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			out, _ := selftest(t, tc.mode, tc.command)
+			out, _ := selftest(t, tc.profile, tc.command)
 			if tc.wantSubstr != "" && !strings.Contains(out, tc.wantSubstr) {
 				t.Fatalf("output missing %q:\n%s", tc.wantSubstr, out)
 			}

@@ -25,7 +25,7 @@ const (
 )
 
 // denial is a refused request. The code is a stable identifier the extension
-// can branch on; write_requires_publish is the only one that offers a mode
+// can branch on; write_requires_publish is the only one that offers a profile
 // escalation. The HTTP status and message are what the client sees.
 type denial struct {
 	code    string
@@ -84,7 +84,7 @@ func authorizeRequest(class policyClass, method, requestPath string, header http
 	return authorizeREST(class, method)
 }
 
-// authorizeGit applies the mode policy to a recognized Git smart HTTP
+// authorizeGit applies the profile policy to a recognized Git smart HTTP
 // service. Fetching is permitted in every class; pushing requires publish.
 func authorizeGit(class policyClass, service string) *denial {
 	switch service {
@@ -95,7 +95,7 @@ func authorizeGit(class policyClass, service string) *denial {
 			return nil
 		}
 		return newDenial(denyWriteRequiresPublish, http.StatusForbidden,
-			"git push requires publish mode")
+			"git push requires publish profile")
 	default:
 		return newDenial(denyUnsupportedRequest, http.StatusBadRequest,
 			"unsupported Git service")
@@ -111,7 +111,7 @@ func authorizeREST(class policyClass, method string) *denial {
 			return nil
 		}
 		return newDenial(denyWriteRequiresPublish, http.StatusForbidden,
-			method+" is a write and requires publish mode")
+			method+" is a write and requires publish profile")
 	}
 	return newDenial(denyUnsupportedMethod, http.StatusMethodNotAllowed,
 		"method "+method+" is not supported")
@@ -143,7 +143,7 @@ func authorizeGraphQL(class policyClass, method string, header http.Header, body
 			return nil
 		}
 		return newDenial(denyWriteRequiresPublish, http.StatusForbidden,
-			"GraphQL mutations require publish mode")
+			"GraphQL mutations require publish profile")
 	default:
 		return newDenial(denyUnsupportedRequest, http.StatusForbidden,
 			"GraphQL "+string(op.kind)+" operations are not supported")

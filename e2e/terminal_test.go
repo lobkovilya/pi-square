@@ -13,55 +13,55 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-var _ = Describe("mode presentation in the interactive terminal", func() {
-	DescribeTable("shows the launch mode and ordered resource indicators",
-		func(ctx SpecContext, mode, row string) {
+var _ = Describe("profile presentation in the interactive terminal", func() {
+	DescribeTable("shows the launch profile and ordered resource indicators",
+		func(ctx SpecContext, profile, row string) {
 			// given
-			opts, err := fixture.SessionOptions(mode)
+			opts, err := fixture.SessionOptions(profile)
 			Expect(err).NotTo(HaveOccurred())
-			session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode="+mode, "--"), opts)
+			session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--profile="+profile, "--"), opts)
 			Expect(err).NotTo(HaveOccurred())
 			DeferCleanup(session.Close)
 
 			// when
 			Eventually(session.Screen).WithTimeout(3 * time.Second).Should(ContainSubstring(row))
-			startup := session.Screen() // Ready invoked /gh-mode status.
+			startup := session.Screen() // Ready invoked /pi-square-profile status.
 
 			// then
-			Expect(startup).To(ContainSubstring("pi-square: " + mode))
+			Expect(startup).To(ContainSubstring("pi-square: profile " + profile))
 			Expect(startup).To(ContainSubstring(row))
 			Expect(session.Quit(ctx)).To(Succeed())
 		},
-		Entry("browse", "browse", "browse ·  ro ·  ro ·  ro ·  rw"),
-		Entry("local", "local", "local ·  rw ·  rw ·  ro ·  rw"),
-		Entry("publish", "publish", "publish ·  rw ·  rw ·  rw ·  rw"),
+		Entry("browse", "browse", "browse ·  ro ·  ro ·  on ·  off"),
+		Entry("local", "local", "local ·  rw ·  ro ·  on ·  on"),
+		Entry("publish", "publish", "publish ·  rw ·  rw ·  on ·  on"),
 	)
 
-	It("updates on commands, cycling and reload, keeping the mode visible when narrow", func(ctx SpecContext) {
+	It("updates on commands, cycling and reload, keeping the profile visible when narrow", func(ctx SpecContext) {
 		// given
 		opts, err := fixture.SessionOptions("browse")
 		Expect(err).NotTo(HaveOccurred())
-		session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode=browse", "--"), opts)
+		session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--profile=browse", "--"), opts)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(session.Close)
 
 		// when
-		Expect(session.Slash(ctx, "/gh-mode local", "pi-square: local")).To(Succeed())
+		Expect(session.Slash(ctx, "/pi-square-profile local", "pi-square: profile local")).To(Succeed())
 		local := session.Screen()
-		Expect(session.Slash(ctx, "/gh-mode toggle", "pi-square: publish")).To(Succeed())
+		Expect(session.Slash(ctx, "/pi-square-profile toggle", "pi-square: profile publish")).To(Succeed())
 		publish := session.Screen()
-		Expect(session.Slash(ctx, "/gh-mode browse", "pi-square: browse")).To(Succeed())
-		Expect(session.Slash(ctx, "/gh-mode local", "pi-square: local")).To(Succeed())
+		Expect(session.Slash(ctx, "/pi-square-profile browse", "pi-square: profile browse")).To(Succeed())
+		Expect(session.Slash(ctx, "/pi-square-profile local", "pi-square: profile local")).To(Succeed())
 		Expect(session.Slash(ctx, "/reload", "Reloaded keybindings")).To(Succeed())
-		Expect(session.Slash(ctx, "/gh-mode status", "pi-square: local")).To(Succeed())
+		Expect(session.Slash(ctx, "/pi-square-profile status", "pi-square: profile local")).To(Succeed())
 		reloaded := session.Screen()
 		Expect(session.Resize(30, 80)).To(Succeed())
 		narrow := session.Screen()
 
 		// then
-		Expect(local).To(ContainSubstring("local ·  rw ·  rw ·  ro ·  rw"))
-		Expect(publish).To(ContainSubstring("publish ·  rw ·  rw ·  rw ·  rw"))
-		Expect(reloaded).To(ContainSubstring("local ·  rw ·  rw ·  ro ·  rw"))
+		Expect(local).To(ContainSubstring("local ·  rw ·  ro ·  on ·  on"))
+		Expect(publish).To(ContainSubstring("publish ·  rw ·  rw ·  on ·  on"))
+		Expect(reloaded).To(ContainSubstring("local ·  rw ·  ro ·  on ·  on"))
 		Expect(narrow).To(MatchRegexp(`(?m)^no-model-guard local ·  rw`))
 		Expect(session.Quit(ctx)).To(Succeed())
 	})
@@ -69,11 +69,11 @@ var _ = Describe("mode presentation in the interactive terminal", func() {
 
 var _ = Describe("interactive routing and capture", func() {
 	DescribeTable("routes explicit ! and !! through the production sandbox",
-		func(ctx SpecContext, mode, prefix, writability string) {
+		func(ctx SpecContext, profile, prefix, writability string) {
 			// given
-			opts, err := fixture.SessionOptions(mode)
+			opts, err := fixture.SessionOptions(profile)
 			Expect(err).NotTo(HaveOccurred())
-			command := exec.Command(fixture.Binary, "--gh-mode="+mode, "--")
+			command := exec.Command(fixture.Binary, "--profile="+profile, "--")
 			session, err := harness.OpenPi(ctx, command, opts)
 			Expect(err).NotTo(HaveOccurred())
 			DeferCleanup(session.Close)
@@ -87,17 +87,17 @@ var _ = Describe("interactive routing and capture", func() {
 			Expect(result.Output).To(Equal([]byte("hello\nstderr\n" + writability + "\n")))
 			Expect(session.Quit(ctx)).To(Succeed())
 		},
-		Entry("in browse mode", "browse", "!", "readonly"),
-		Entry("in local mode", "local", "!!", "writable"),
-		Entry("in publish mode", "publish", "!", "writable"),
+		Entry("in browse profile", "browse", "!", "readonly"),
+		Entry("in local profile", "local", "!!", "writable"),
+		Entry("in publish profile", "publish", "!", "writable"),
 	)
 
 	It("captures wrapped ANSI, binary, empty, and signal-terminated output losslessly", func(ctx SpecContext) {
 		// given
-		mode := "browse"
-		opts, err := fixture.SessionOptions(mode)
+		profile := "browse"
+		opts, err := fixture.SessionOptions(profile)
 		Expect(err).NotTo(HaveOccurred())
-		session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode=browse", "--"), opts)
+		session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--profile=browse", "--"), opts)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(session.Close)
 
@@ -126,11 +126,11 @@ var _ = Describe("interactive routing and capture", func() {
 
 	It("times out a hung shell after readiness without fabricating a result", func(ctx SpecContext) {
 		// given
-		mode := "browse"
-		opts, err := fixture.SessionOptions(mode)
+		profile := "browse"
+		opts, err := fixture.SessionOptions(profile)
 		Expect(err).NotTo(HaveOccurred())
 		opts.Timeout = 90 * time.Second
-		session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode=browse", "--"), opts)
+		session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--profile=browse", "--"), opts)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(session.Close)
 		op, cancel := bounded(ctx, 2*time.Second)
