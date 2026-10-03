@@ -83,6 +83,7 @@ func TestRunCLI(t *testing.T) {
 }
 
 func TestRunCLILaunchError(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	want := errors.New("launch failed")
 	err := runCLI(nil, &bytes.Buffer{}, func([]string, bool, string, string, bool, configuration) error { return want })
 	if !errors.Is(err, want) {
