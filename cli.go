@@ -104,7 +104,7 @@ func runCLI(args []string, out io.Writer, launch func([]string, bool, string, st
 		return fmt.Errorf("invalid gateway name %q", *gateway)
 	}
 	if *showHelp {
-		_, err := fmt.Fprint(out, "Usage: pi-square [options] [-- pi arguments...]\n       pi-square config default\n       pi-square gateway list | start NAME | stop NAME [--force]\n\nOptions:\n  --mode=dev            Disable permission profile prompt guidance (sandbox remains active)\n  --config=PATH        Configuration file\n  --profile=NAME       Initial permission profile\n  --gateway=NAME        Attach to an existing gateway\n  --version             Show pi-square version\n  --help, -h            Show help\n\nPass arguments to pi after --, e.g. pi-square -- --version.\n")
+		_, err := fmt.Fprint(out, "Usage: pi-square [options] [-- pi arguments...]\n       pi-square config default\n       pi-square gateway list | start NAME | stop NAME [--force]\n\nOptions:\n  --mode=dev            Disable permission profile prompt guidance (sandbox remains active)\n  --config=PATH         Configuration file\n  --profile=NAME        Initial permission profile\n  --gateway=NAME        Attach to an existing gateway\n  --version             Show pi-square version\n  --help, -h            Show help\n\nPass arguments to pi after --, e.g. pi-square -- --version.\n")
 		return err
 	}
 	if *showVersion {

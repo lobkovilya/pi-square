@@ -32,9 +32,9 @@ function setup(initialProfile, entries = [], config = builtins, accept = true) {
 	const ctx = {
   hasUI: true,
 		sessionManager: { getEntries: () => entries },
-		ui: { select: async (_title, choices) => accept ? choices[0] : "Keep existing", setStatus: (_key, value) => { status = value; }, theme: { fg: (_color, value) => value }, notify() {} },
+		ui: { select: async (_title, choices) => typeof accept === "function" ? accept(choices) : accept ? choices[0] : "Keep existing", setStatus: (_key, value) => { status = value; }, theme: { fg: (_color, value) => value }, notify() {} },
 	};
-	const env = { PI_SQUARE_ACTIVE: "1", PI_SQUARE_GH_HELPER: "/launcher", PI_SQUARE_CONFIG: JSON.stringify(config) };
+	const env = { PI_SQUARE_ACTIVE: "1", PI_SQUARE_GH_HELPER: "/launcher", PI_SQUARE_CONFIG: JSON.stringify({ order: Object.keys(config.profiles), ...config }) };
 	if (initialProfile) env.PI_SQUARE_INITIAL_PROFILE = initialProfile;
 	const sandbox = vm.createContext({
 		fs, path, Buffer, process: { env, cwd: () => process.cwd() },
@@ -44,6 +44,7 @@ function setup(initialProfile, entries = [], config = builtins, accept = true) {
 	vm.runInContext(source + "\nglobalThis.extension = permissionProfileExtension;", sandbox);
 	sandbox.extension(pi);
 	return {
+		env,
 		active: () => active,
 		status: () => status,
 		state: () => state,
@@ -139,4 +140,49 @@ test("interactive shell commands still route through browse sandbox", async () =
 	await app.emit("session_start");
 	const result = await app.emit("user_bash");
 	assert.match(result.operations.exec("ls", "/tmp", {}), /--pi-square-stub 'browse' /);
+});
+
+test("reload keeps a launch profile narrower than the default", async () => {
+	const config = { ...builtins, defaultProfile: "local" };
+	const app = setup("browse", [], config);
+	await app.emit("session_start");
+	const entries = app.state().map(({ type, data }) => ({ type: "custom", customType: type, data }));
+	const reloaded = setup(undefined, entries, config);
+	await reloaded.emit("session_start");
+	assert.match(reloaded.status(), /^browse/);
+	assert.equal(reloaded.active().includes("bash"), false);
+});
+
+test("toggle follows the configured order", async () => {
+	const config = { ...builtins, order: ["browse", "publish", "local"] };
+	const app = setup(undefined, [], config);
+	await app.emit("session_start");
+	await app.profile("toggle");
+	assert.match(app.status(), /^publish/);
+	await app.profile("toggle");
+	assert.match(app.status(), /^local/);
+});
+
+test("a profile switch during the workdir prompt honors the new profile", async () => {
+	let app;
+	app = setup(undefined, [], builtins, async () => { await app.profile("local"); return "Keep existing"; });
+	await app.emit("session_start");
+	const allowed = await app.emit("tool_call", { toolName: "write", input: { path: "new-file" } });
+	assert.equal(allowed, undefined);
+	const config = { ...builtins, profiles: { ...builtins.profiles, review: { ...builtins.profiles.browse, prompt: "Review." } } };
+	app = setup(undefined, [], config, async (choices) => { await app.profile("review"); return choices[0]; });
+	await app.emit("session_start");
+	const blocked = await app.emit("tool_call", { toolName: "write", input: { path: "new-file" } });
+	assert.equal(blocked.block, true);
+});
+
+test("malformed bash calls and a missing helper fail cleanly", async () => {
+	const app = setup("local");
+	await app.emit("session_start");
+	const malformed = await app.emit("tool_call", { toolName: "bash", input: {} });
+	assert.equal(malformed.block, true);
+	delete app.env.PI_SQUARE_GH_HELPER;
+	const event = { toolName: "bash", input: { command: "ls" } };
+	assert.equal(await app.emit("tool_call", event), undefined);
+	assert.match(event.input.command, /exit 127$/);
 });

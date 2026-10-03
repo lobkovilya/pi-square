@@ -34,7 +34,7 @@ func TestIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := append(os.Environ(), "XDG_RUNTIME_DIR="+runtimeDir)
+	env := append(os.Environ(), "XDG_RUNTIME_DIR="+runtimeDir, "XDG_CONFIG_HOME="+t.TempDir())
 	t.Cleanup(func() {
 		stop := exec.Command(bin, "gateway", "stop", "default", "--force")
 		stop.Env = env

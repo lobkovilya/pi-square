@@ -39,6 +39,8 @@ func main() {
 		exitOnError(runPiStage(os.Args[2:]))
 	case len(os.Args) >= 3 && os.Args[1] == netnsWorkerMarker:
 		exitOnError(runFrontend(os.Args[2]))
+	case len(os.Args) == 2 && os.Args[1] == offlineNetnsMarker:
+		exitOnError(runOfflineNetns())
 	case len(os.Args) >= 2 && os.Args[1] == commandMarker:
 		exitOnError(commandStage(os.Args[2:]))
 	case len(os.Args) >= 2 && os.Args[1] == stubMarker:

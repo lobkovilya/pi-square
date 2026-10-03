@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -21,9 +22,74 @@ type profile struct {
 	Prompt  string `json:"prompt"`
 }
 
+// Order keeps the document order of profiles, which the map loses; cycling
+// through profiles follows it.
 type configuration struct {
-	DefaultProfile string             `json:"defaultProfile"`
-	Profiles       map[string]profile `json:"profiles"`
+	DefaultProfile string
+	Profiles       map[string]profile
+	Order          []string
+}
+
+func strictDecode(data []byte, v any) error {
+	d := json.NewDecoder(bytes.NewReader(data))
+	d.DisallowUnknownFields()
+	return d.Decode(v)
+}
+
+func (c *configuration) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		DefaultProfile string          `json:"defaultProfile"`
+		Profiles       json.RawMessage `json:"profiles"`
+	}
+	if err := strictDecode(data, &raw); err != nil {
+		return err
+	}
+	*c = configuration{DefaultProfile: raw.DefaultProfile}
+	if len(raw.Profiles) == 0 || string(raw.Profiles) == "null" {
+		return nil
+	}
+	if err := strictDecode(raw.Profiles, &c.Profiles); err != nil {
+		return err
+	}
+	d := json.NewDecoder(bytes.NewReader(raw.Profiles))
+	if _, err := d.Token(); err != nil {
+		return err
+	}
+	for d.More() {
+		key, err := d.Token()
+		if err != nil {
+			return err
+		}
+		name := key.(string)
+		if slices.Contains(c.Order, name) {
+			return fmt.Errorf("duplicate profile %q", name)
+		}
+		c.Order = append(c.Order, name)
+		if err := d.Decode(new(json.RawMessage)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c configuration) MarshalJSON() ([]byte, error) {
+	profiles := make([]string, len(c.Order))
+	for i, name := range c.Order {
+		key, err := json.Marshal(name)
+		if err != nil {
+			return nil, err
+		}
+		value, err := json.Marshal(c.Profiles[name])
+		if err != nil {
+			return nil, err
+		}
+		profiles[i] = string(key) + ":" + string(value)
+	}
+	defaultProfile, err := json.Marshal(c.DefaultProfile)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(`{"defaultProfile":` + string(defaultProfile) + `,"profiles":{` + strings.Join(profiles, ",") + `}}`), nil
 }
 
 func builtinConfiguration() configuration {
@@ -40,7 +106,7 @@ func builtinConfiguration() configuration {
 			Workdir: "rw", GitHub: "rw", Net: "on", Bash: "on",
 			Prompt: "The user permits publishing work as part of the requested task, including pushes, pull requests, issues, comments, and submitted reviews. Publication is allowed, not required.",
 		},
-	}}
+	}, []string{"browse", "local", "publish"}}
 }
 
 var profileName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
@@ -48,7 +114,6 @@ var profileName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 func parseConfiguration(data []byte) (configuration, error) {
 	var c configuration
 	d := json.NewDecoder(bytes.NewReader(data))
-	d.DisallowUnknownFields()
 	if err := d.Decode(&c); err != nil {
 		return c, fmt.Errorf("configuration: %w", err)
 	}

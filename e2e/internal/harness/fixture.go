@@ -125,14 +125,14 @@ func (f *Fixture) Environment(token string) []string {
 	env := CleanEnvironment("")
 	filtered := env[:0]
 	for _, item := range env {
-		if !strings.HasPrefix(item, "XDG_RUNTIME_DIR=") {
+		if !strings.HasPrefix(item, "XDG_RUNTIME_DIR=") && !strings.HasPrefix(item, "XDG_CONFIG_HOME=") {
 			filtered = append(filtered, item)
 		}
 	}
 	if token == "" {
 		token = FakeHostToken
 	}
-	return append(filtered, "GH_TOKEN="+token, "XDG_RUNTIME_DIR="+f.runtimeDir)
+	return append(filtered, "GH_TOKEN="+token, "XDG_RUNTIME_DIR="+f.runtimeDir, "XDG_CONFIG_HOME="+filepath.Join(f.runtimeDir, "config"))
 }
 
 // SessionOptions is the sandbox configuration: fake host token, scratch workdir.

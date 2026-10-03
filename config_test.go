@@ -50,6 +50,35 @@ var _ = Describe("permission configuration", func() {
 		Expect(ro).To(BeTrue())
 	})
 
+	It("preserves profile order through parsing and serialization", func() {
+		// given
+		input := []byte(`{"defaultProfile":"z","profiles":{"z":{"workdir":"ro","github":"ro","net":"on","bash":"off","prompt":"Z."},"10":{"workdir":"rw","github":"ro","net":"on","bash":"on","prompt":"Ten."},"a":{"workdir":"rw","github":"rw","net":"on","bash":"on","prompt":"A."}}}`)
+
+		// when
+		c, err := parseConfiguration(input)
+		Expect(err).NotTo(HaveOccurred())
+		data, marshalErr := json.Marshal(c)
+		var roundTrip configuration
+		unmarshalErr := json.Unmarshal(data, &roundTrip)
+
+		// then
+		Expect(c.Order).To(Equal([]string{"z", "10", "a"}))
+		Expect(marshalErr).NotTo(HaveOccurred())
+		Expect(unmarshalErr).NotTo(HaveOccurred())
+		Expect(roundTrip).To(Equal(c))
+	})
+
+	It("rejects duplicate profiles", func() {
+		// given
+		input := []byte(`{"defaultProfile":"x","profiles":{"x":{"workdir":"ro","github":"ro","net":"on","bash":"off","prompt":"X."},"x":{"workdir":"rw","github":"ro","net":"on","bash":"on","prompt":"X."}}}`)
+
+		// when
+		_, err := parseConfiguration(input)
+
+		// then
+		Expect(err).To(MatchError(ContainSubstring(`duplicate profile "x"`)))
+	})
+
 	It("loads the XDG file once and errors for missing explicit files", func() {
 		// given
 		dir := GinkgoT().TempDir()

@@ -157,26 +157,31 @@ func (s *supervisor) start() error {
 		return fmt.Errorf("write CA bundle: %w", err)
 	}
 
-	if err := s.startWorker(classRO, roSocket); err != nil {
-		return err
+	workerArgs := map[policyClass][]string{
+		classRO:      {netnsWorkerMarker, roSocket},
+		classW:       {netnsWorkerMarker, wSocket},
+		classOffline: {offlineNetnsMarker},
 	}
-	if err := s.startWorker(classW, wSocket); err != nil {
-		return err
-	}
-	if err := s.startWorker(classOffline, "offline"); err != nil {
-		return err
+	for _, p := range s.secrets.Config.Profiles {
+		class, _, _ := p.commandPolicy()
+		if s.workers[class] != nil {
+			continue
+		}
+		if err := s.startWorker(class, workerArgs[class]); err != nil {
+			return err
+		}
 	}
 	return s.listenControl()
 }
 
-func (s *supervisor) startWorker(class policyClass, socketPath string) error {
+func (s *supervisor) startWorker(class policyClass, args []string) error {
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		return err
 	}
 	defer pr.Close()
 
-	cmd := exec.Command(helperPath, netnsWorkerMarker, socketPath)
+	cmd := exec.Command(helperPath, args...)
 	cmd.Env = minimalEnv(s.baseEnv)
 	cmd.ExtraFiles = []*os.File{pw}
 	cmd.SysProcAttr = netnsAttr()
@@ -299,7 +304,7 @@ func (s *supervisor) launchCommand(req launchRequest, class policyClass, readonl
 		encode(s.workdir),
 	)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdio[0], stdio[1], stdio[2]
-	cmd.Env = s.commandEnv(home)
+	cmd.Env = s.commandEnv(class, home)
 	cmd.ExtraFiles = []*os.File{w.netns}
 	cmd.SysProcAttr = commandAttr()
 	if err := cmd.Start(); err != nil {
@@ -308,16 +313,18 @@ func (s *supervisor) launchCommand(req launchRequest, class policyClass, readonl
 	return cmd, nil
 }
 
-func (s *supervisor) commandEnv(home string) []string {
+func (s *supervisor) commandEnv(class policyClass, home string) []string {
 	env := append([]string(nil), s.baseEnv...)
 	env = setEnv(env, "HOME", home)
 	env = setEnv(env, "GH_TOKEN", dummyCommandToken)
-	proxy := "http://" + frontendListen
-	for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
-		env = setEnv(env, key, proxy)
-	}
-	for _, key := range []string{"NO_PROXY", "no_proxy"} {
-		env = setEnv(env, key, "")
+	if class != classOffline {
+		proxy := "http://" + frontendListen
+		for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
+			env = setEnv(env, key, proxy)
+		}
+		for _, key := range []string{"NO_PROXY", "no_proxy"} {
+			env = setEnv(env, key, "")
+		}
 	}
 	for _, key := range []string{"SSL_CERT_FILE", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "DENO_CERT"} {
 		env = setEnv(env, key, caBundlePath)
@@ -332,7 +339,12 @@ func (s *supervisor) runPi(args []string) error {
 	// extension and stub need. The supervisor keeps its own secrets out of pi.
 	env := stripSupervisorEnv(sanitizeParentEnv(os.Environ()))
 	env = setEnv(env, "PI_SQUARE_ACTIVE", "1")
-	configJSON, err := json.Marshal(s.secrets.Config)
+	// An explicit order survives JSON.parse, which hoists integer-like keys.
+	configJSON, err := json.Marshal(map[string]any{
+		"defaultProfile": s.secrets.Config.DefaultProfile,
+		"profiles":       s.secrets.Config.Profiles,
+		"order":          s.secrets.Config.Order,
+	})
 	if err != nil {
 		return err
 	}
@@ -452,12 +464,6 @@ func readSecrets() (secrets, error) {
 		return secrets{}, errors.New("incomplete secrets")
 	}
 	return sec, nil
-}
-
-func deriveProfile(profile string) (class policyClass, readonlyWorkdir, throwawayHome, ok bool) {
-	p, ok := builtinConfiguration().Profiles[profile]
-	class, readonlyWorkdir, throwawayHome = p.commandPolicy()
-	return class, readonlyWorkdir, throwawayHome, ok
 }
 
 func recvRequest(conn *net.UnixConn) (launchRequest, []*os.File, error) {

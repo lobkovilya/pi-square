@@ -11,7 +11,7 @@ function shellQuote(value: string): string { return `'${value.replace(/'/g, `'"'
 
 function routeCommand(command: string, currentProfile: string): string {
  const helper = process.env.PI_SQUARE_GH_HELPER;
- if (!helper) throw new Error("pi-square launcher is not configured");
+ if (!helper) return "echo 'pi-square: launcher is not configured' >&2; exit 127";
 
  return `exec ${shellQuote(helper)} --pi-square-stub ${shellQuote(currentProfile)} ${Buffer.from(command).toString("base64")}`;
 }
@@ -39,9 +39,9 @@ function resolvedTargetPath(input: string): string {
 export default function permissionProfileExtension(pi: ExtensionAPI): void {
  if (process.env.PI_SQUARE_ACTIVE !== "1") return;
 
- const config = JSON.parse(process.env.PI_SQUARE_CONFIG!) as { defaultProfile: string; profiles: Record<string, Profile> };
+ const config = JSON.parse(process.env.PI_SQUARE_CONFIG!) as { defaultProfile: string; profiles: Record<string, Profile>; order: string[] };
  const profiles = config.profiles;
- const names = Object.keys(profiles);
+ const names = config.order;
  const hasProfile = (name: string) => Object.prototype.hasOwnProperty.call(profiles, name);
 
  let currentProfile = config.defaultProfile;
@@ -73,11 +73,13 @@ export default function permissionProfileExtension(pi: ExtensionAPI): void {
   if (!ctx.hasUI) return false;
 
   const previous = currentProfile;
-  const choices = names.filter(n => profiles[n][key] === "rw" && (key !== "github" || (profiles[n].net === "on" && profiles[n].bash === "on")));
+  const grants = (n: string) => profiles[n][key] === "rw" && (key !== "github" || (profiles[n].net === "on" && profiles[n].bash === "on"));
+  const choices = names.filter(grants);
   if (!choices.length) return false;
 
   const selected = await ctx.ui.select(`${key} write access requires another profile`, [...choices, "Keep existing"]);
-  if (!selected || !choices.includes(selected) || currentProfile !== previous) return false;
+  if (currentProfile !== previous) return grants(currentProfile);
+  if (!selected || !choices.includes(selected)) return false;
 
   return switchProfile(selected, ctx);
  }
@@ -118,6 +120,8 @@ export default function permissionProfileExtension(pi: ExtensionAPI): void {
   if (applyInitial) {
    currentProfile = initial!;
    applyInitial = false;
+   // Persist so /reload keeps a launch profile that is narrower than the default.
+   pi.appendEntry("pi-square-profile-state", { profile: currentProfile });
   }
 
   update(ctx);
@@ -132,7 +136,8 @@ export default function permissionProfileExtension(pi: ExtensionAPI): void {
  pi.on("tool_call", async (event, ctx) => {
   if (event.toolName === "bash") {
    if (profiles[currentProfile].bash === "off") return { block: true, reason: "The bash tool is unavailable in this profile. Use /pi-square-profile to switch." };
-   event.input.command = routeCommand(event.input.command as string, currentProfile);
+   if (typeof event.input.command !== "string") return { block: true, reason: "The bash command must be a string." };
+   event.input.command = routeCommand(event.input.command, currentProfile);
   }
 
   if (profiles[currentProfile].workdir !== "ro" || !["edit", "write"].includes(event.toolName) || typeof event.input.path !== "string") return;
