@@ -22,15 +22,16 @@ import (
 // secrets travel from the host launcher to the supervisor over an inherited
 // pipe so they never appear in any environment or argument list.
 type secrets struct {
-	GatewayCA   string   `json:"gateway_ca"`
-	WToken      string   `json:"w_token"`
-	GitIdentity []string `json:"git_identity"`
+	Config      configuration `json:"config"`
+	GatewayCA   string        `json:"gateway_ca"`
+	WToken      string        `json:"w_token"`
+	GitIdentity []string      `json:"git_identity"`
 }
 
 // launchRequest is what the stub asks the supervisor to run. The supervisor
-// never trusts Mode alone for a write: publish additionally requires WToken.
+// never trusts Profile alone for a write: publish additionally requires WToken.
 type launchRequest struct {
-	Mode    string `json:"mode"`
+	Profile string `json:"profile"`
 	Cwd     string `json:"cwd"`
 	Command string `json:"command"`
 	WToken  string `json:"wtoken,omitempty"`
@@ -114,21 +115,21 @@ func stage(args []string) error {
 	// Integration hook: drive a single command through the real stub, control
 	// channel, network namespace, and gateway instead of launching pi. Used by
 	// the isolation and policy tests; never reachable through the normal CLI.
-	if selftestMode := os.Getenv("PI_SQUARE_SELFTEST_MODE"); selftestMode != "" {
-		return s.runSelftest(selftestMode, os.Getenv("PI_SQUARE_SELFTEST_CMD"))
+	if selftestProfile := os.Getenv("PI_SQUARE_SELFTEST_PROFILE"); selftestProfile != "" {
+		return s.runSelftest(selftestProfile, os.Getenv("PI_SQUARE_SELFTEST_CMD"))
 	}
 
 	return s.runPi(args)
 }
 
-func (s *supervisor) runSelftest(mode, command string) error {
+func (s *supervisor) runSelftest(profile, command string) error {
 	env := stripSupervisorEnv(sanitizeParentEnv(os.Environ()))
 	env = setEnv(env, "PI_SQUARE_WTOKEN", s.secrets.WToken)
 	env = setEnv(env, "PI_SQUARE_GH_HELPER", helperPath)
 
 	// Emulate exactly what the extension does: rewrite the command to exec the
 	// stub, then let bash run it, so the whole real invocation path is exercised.
-	bashCommand := fmt.Sprintf("exec '%s' %s %s %s", helperPath, stubMarker, mode, encode(command))
+	bashCommand := fmt.Sprintf("exec '%s' %s %s %s", helperPath, stubMarker, profile, encode(command))
 	cmd := exec.Command("bash", "-lc", bashCommand)
 	cmd.Env = env
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
@@ -156,23 +157,31 @@ func (s *supervisor) start() error {
 		return fmt.Errorf("write CA bundle: %w", err)
 	}
 
-	if err := s.startWorker(classRO, roSocket); err != nil {
-		return err
+	workerArgs := map[policyClass][]string{
+		classRO:      {netnsWorkerMarker, roSocket},
+		classW:       {netnsWorkerMarker, wSocket},
+		classOffline: {offlineNetnsMarker},
 	}
-	if err := s.startWorker(classW, wSocket); err != nil {
-		return err
+	for _, p := range s.secrets.Config.Profiles {
+		class, _, _ := p.commandPolicy()
+		if s.workers[class] != nil {
+			continue
+		}
+		if err := s.startWorker(class, workerArgs[class]); err != nil {
+			return err
+		}
 	}
 	return s.listenControl()
 }
 
-func (s *supervisor) startWorker(class policyClass, socketPath string) error {
+func (s *supervisor) startWorker(class policyClass, args []string) error {
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		return err
 	}
 	defer pr.Close()
 
-	cmd := exec.Command(helperPath, netnsWorkerMarker, socketPath)
+	cmd := exec.Command(helperPath, args...)
 	cmd.Env = minimalEnv(s.baseEnv)
 	cmd.ExtraFiles = []*os.File{pw}
 	cmd.SysProcAttr = netnsAttr()
@@ -237,12 +246,13 @@ func (s *supervisor) handleControl(conn *net.UnixConn) {
 		return
 	}
 
-	class, readonlyWorkdir, throwawayHome, ok := deriveMode(req.Mode)
+	p, ok := s.secrets.Config.Profiles[req.Profile]
+	class, readonlyWorkdir, throwawayHome := p.commandPolicy()
 	if !ok {
-		s.reply(conn, launchResponse{Code: denyUnsupportedRequest, Message: "unknown launch mode"})
+		s.reply(conn, launchResponse{Code: denyUnsupportedRequest, Message: "unknown launch profile"})
 		return
 	}
-	if class == classW && req.WToken != s.secrets.WToken {
+	if p.GitHub == "rw" && req.WToken != s.secrets.WToken {
 		s.reply(conn, launchResponse{Code: denyWriteRequiresPublish, Message: "publish is required to run write-enabled commands"})
 		return
 	}
@@ -294,7 +304,7 @@ func (s *supervisor) launchCommand(req launchRequest, class policyClass, readonl
 		encode(s.workdir),
 	)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdio[0], stdio[1], stdio[2]
-	cmd.Env = s.commandEnv(home)
+	cmd.Env = s.commandEnv(class, home)
 	cmd.ExtraFiles = []*os.File{w.netns}
 	cmd.SysProcAttr = commandAttr()
 	if err := cmd.Start(); err != nil {
@@ -303,16 +313,18 @@ func (s *supervisor) launchCommand(req launchRequest, class policyClass, readonl
 	return cmd, nil
 }
 
-func (s *supervisor) commandEnv(home string) []string {
+func (s *supervisor) commandEnv(class policyClass, home string) []string {
 	env := append([]string(nil), s.baseEnv...)
 	env = setEnv(env, "HOME", home)
 	env = setEnv(env, "GH_TOKEN", dummyCommandToken)
-	proxy := "http://" + frontendListen
-	for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
-		env = setEnv(env, key, proxy)
-	}
-	for _, key := range []string{"NO_PROXY", "no_proxy"} {
-		env = setEnv(env, key, "")
+	if class != classOffline {
+		proxy := "http://" + frontendListen
+		for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
+			env = setEnv(env, key, proxy)
+		}
+		for _, key := range []string{"NO_PROXY", "no_proxy"} {
+			env = setEnv(env, key, "")
+		}
 	}
 	for _, key := range []string{"SSL_CERT_FILE", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "DENO_CERT"} {
 		env = setEnv(env, key, caBundlePath)
@@ -327,13 +339,23 @@ func (s *supervisor) runPi(args []string) error {
 	// extension and stub need. The supervisor keeps its own secrets out of pi.
 	env := stripSupervisorEnv(sanitizeParentEnv(os.Environ()))
 	env = setEnv(env, "PI_SQUARE_ACTIVE", "1")
+	// An explicit order survives JSON.parse, which hoists integer-like keys.
+	configJSON, err := json.Marshal(map[string]any{
+		"defaultProfile": s.secrets.Config.DefaultProfile,
+		"profiles":       s.secrets.Config.Profiles,
+		"order":          s.secrets.Config.Order,
+	})
+	if err != nil {
+		return err
+	}
+	env = setEnv(env, "PI_SQUARE_CONFIG", string(configJSON))
 	env = setEnv(env, "PI_SQUARE_GH_HELPER", helperPath)
 	env = setEnv(env, "PI_SQUARE_WTOKEN", s.secrets.WToken)
 	if s.devMode {
 		env = setEnv(env, "PI_SQUARE_DEV_MODE", "1")
 	}
-	if initialMode := os.Getenv("PI_SQUARE_INITIAL_GH_MODE"); initialMode != "" {
-		env = setEnv(env, "PI_SQUARE_INITIAL_GH_MODE", initialMode)
+	if initialProfile := os.Getenv("PI_SQUARE_INITIAL_PROFILE"); initialProfile != "" {
+		env = setEnv(env, "PI_SQUARE_INITIAL_PROFILE", initialProfile)
 	}
 
 	cmd := exec.Command(helperPath, append([]string{piStageMarker, s.piPath}, args...)...)
@@ -442,18 +464,6 @@ func readSecrets() (secrets, error) {
 		return secrets{}, errors.New("incomplete secrets")
 	}
 	return sec, nil
-}
-
-func deriveMode(mode string) (class policyClass, readonlyWorkdir, throwawayHome, ok bool) {
-	switch mode {
-	case "browse":
-		return classRO, true, true, true
-	case "local":
-		return classRO, false, true, true
-	case "publish":
-		return classW, false, false, true
-	}
-	return "", false, false, false
 }
 
 func recvRequest(conn *net.UnixConn) (launchRequest, []*os.File, error) {

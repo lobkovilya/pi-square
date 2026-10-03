@@ -42,7 +42,7 @@ type Session struct {
 	pty               *os.File
 	term              *terminal
 	started, deadline time.Time
-	mode              string
+	profile           string
 	writeMu           sync.Mutex
 	stateMu           sync.RWMutex
 	exited            bool
@@ -55,7 +55,7 @@ type Session struct {
 }
 
 // OpenPi appends only the fixed isolation flags and model guard after the
-// caller-visible --. Permission mode and shell input always remain in specs.
+// caller-visible --. Permission profile and shell input always remain in specs.
 func OpenPi(ctx context.Context, cmd *exec.Cmd, options SessionOptions) (*Session, error) {
 	if len(cmd.Args) == 0 || cmd.Args[len(cmd.Args)-1] != "--" {
 		return nil, fmt.Errorf("pi-square command must visibly end in -- before OpenPi isolation arguments")
@@ -70,7 +70,7 @@ func OpenPi(ctx context.Context, cmd *exec.Cmd, options SessionOptions) (*Sessio
 	if timeout == 0 {
 		timeout = defaultSessionTimeout
 	}
-	s := &Session{cmd: cmd, term: newTerminal(), started: started, deadline: started.Add(timeout), mode: options.Mode,
+	s := &Session{cmd: cmd, term: newTerminal(), started: started, deadline: started.Add(timeout), profile: options.Profile,
 		waitDone: make(chan struct{}), readDone: make(chan struct{}), replyDone: make(chan struct{}), cleanup: options.Cleanup, exitCode: -1}
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: 240, Rows: 80})
 	if err != nil {
@@ -201,14 +201,14 @@ func (s *Session) waitFor(ctx context.Context, condition func() (bool, error), l
 }
 
 func (s *Session) Ready(ctx context.Context) error {
-	mode := regexp.MustCompile(`\b` + regexp.QuoteMeta(s.mode) + `\b`)
+	profile := regexp.MustCompile(`\b` + regexp.QuoteMeta(s.profile) + `\b`)
 	if err := s.waitFor(ctx, func() (bool, error) {
 		text := s.Screen()
-		return strings.Contains(text, "no-model-guard") && mode.MatchString(text), nil
+		return strings.Contains(text, "no-model-guard") && profile.MatchString(text), nil
 	}, "startup and model tripwire"); err != nil {
 		return err
 	}
-	return s.Slash(ctx, "/gh-mode status", "pi-square: "+s.mode)
+	return s.Slash(ctx, "/pi-square-profile status", "pi-square: profile "+s.profile)
 }
 
 func (s *Session) Slash(ctx context.Context, command, expected string) error {
@@ -255,7 +255,7 @@ func (s *Session) StartBash(ctx context.Context, prefix, command string) (*Runni
 	out := make(chan captureOutcome, 1)
 	completed := func() bool { return completionVisible(s.Screen(), n) }
 	go func() {
-		result := ProcessResult{Status: -1, Mode: s.mode, Command: prefix + " " + command}
+		result := ProcessResult{Status: -1, Profile: s.profile, Command: prefix + " " + command}
 		var frame ProcessResult
 		var ok bool
 		err := s.waitFor(ctx, func() (bool, error) {

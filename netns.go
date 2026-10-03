@@ -44,6 +44,27 @@ func loopbackUp() error {
 	return nil
 }
 
+// signalReady tells the supervisor on the inherited pipe that the namespace is
+// usable, then closes the pipe.
+func signalReady() {
+	if ready := os.NewFile(readyFD, "ready"); ready != nil {
+		ready.Write([]byte{'1'})
+		ready.Close()
+	}
+}
+
+// runOfflineNetns holds a network namespace with only loopback, so offline
+// commands have no route anywhere, not even to a proxy.
+func runOfflineNetns() error {
+	if err := loopbackUp(); err != nil {
+		return fmt.Errorf("bring up loopback: %w", err)
+	}
+	signalReady()
+	for {
+		unix.Pause()
+	}
+}
+
 // runFrontend is the netns worker entrypoint. It is cloned into a fresh network
 // namespace by the supervisor, brings up loopback, and relays every accepted
 // loopback connection to its fixed gateway ingress socket. It holds no
@@ -56,12 +77,7 @@ func runFrontend(gatewaySocket string) error {
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", frontendListen, err)
 	}
-
-	// Signal readiness to the supervisor on the inherited pipe, then close it.
-	if ready := os.NewFile(readyFD, "ready"); ready != nil {
-		ready.Write([]byte{'1'})
-		ready.Close()
-	}
+	signalReady()
 
 	for {
 		client, err := listener.Accept()

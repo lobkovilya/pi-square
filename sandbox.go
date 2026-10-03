@@ -185,7 +185,7 @@ func writeExtension(root string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("create extension directory: %w", err)
 	}
-	if err := os.WriteFile(path, ghModeExtension, 0444); err != nil {
+	if err := os.WriteFile(path, permissionProfileExtension, 0444); err != nil {
 		return fmt.Errorf("write bundled extension: %w", err)
 	}
 	return nil

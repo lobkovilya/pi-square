@@ -7,12 +7,13 @@ import "strings"
 // Internal re-exec markers. Each identifies a stage the binary runs as when it
 // re-executes itself; none of them is an authorization on its own.
 const (
-	stageMarker       = "--pi-square-stage"
-	gatewayMarker     = "--pi-square-gateway-daemon"
-	netnsWorkerMarker = "--pi-square-netns-worker"
-	commandMarker     = "--pi-square-command"
-	stubMarker        = "--pi-square-stub"
-	piStageMarker     = "--pi-square-pi"
+	stageMarker        = "--pi-square-stage"
+	gatewayMarker      = "--pi-square-gateway-daemon"
+	netnsWorkerMarker  = "--pi-square-netns-worker"
+	offlineNetnsMarker = "--pi-square-offline-netns"
+	commandMarker      = "--pi-square-command"
+	stubMarker         = "--pi-square-stub"
+	piStageMarker      = "--pi-square-pi"
 )
 
 // Inherited file descriptors. The stage receives its secrets on fd 3 and the
@@ -29,7 +30,7 @@ const (
 const (
 	runtimeDir    = "/run/pi-square"
 	helperPath    = "/run/pi-square/pi-square"
-	extensionPath = "/run/pi-square/gh-mode.ts"
+	extensionPath = "/run/pi-square/permission-profile.ts"
 	gatewayDir    = "/run/pi-square/gateway"
 	roSocket      = "/run/pi-square/gateway/ro.sock"
 	wSocket       = "/run/pi-square/gateway/w.sock"

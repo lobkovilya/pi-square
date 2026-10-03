@@ -24,7 +24,7 @@ func lines(output []byte) map[string]string {
 }
 
 var _ = Describe("sandbox permissions and isolation", func() {
-	It("defaults to browse when --gh-mode is absent", func(ctx SpecContext) {
+	It("defaults to browse when --profile is absent", func(ctx SpecContext) {
 		// given
 		opts, err := fixture.SessionOptions("browse")
 		Expect(err).NotTo(HaveOccurred())
@@ -45,23 +45,23 @@ var _ = Describe("sandbox permissions and isolation", func() {
 		// given
 		opts, err := fixture.SessionOptions("browse")
 		Expect(err).NotTo(HaveOccurred())
-		session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode=browse", "--"), opts)
+		session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--profile=browse", "--"), opts)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(session.Close)
 
 		// when
 		browse, err := session.Bash(ctx, "!", "if touch probe-file 2>/dev/null; then rm -f probe-file; echo writable; else echo readonly; fi")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(session.Slash(ctx, "/gh-mode local", "pi-square: local")).To(Succeed())
+		Expect(session.Slash(ctx, "/pi-square-profile local", "pi-square: profile local")).To(Succeed())
 		local, err := session.Bash(ctx, "!!", "if touch probe-file 2>/dev/null; then rm -f probe-file; echo writable; else echo readonly; fi")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(session.Slash(ctx, "/gh-mode browse", "pi-square: browse")).To(Succeed())
+		Expect(session.Slash(ctx, "/pi-square-profile browse", "pi-square: profile browse")).To(Succeed())
 		browseAgain, err := session.Bash(ctx, "!", "if touch probe-file 2>/dev/null; then rm -f probe-file; echo writable; else echo readonly; fi")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(session.Slash(ctx, "/gh-mode publish", "pi-square: publish")).To(Succeed())
+		Expect(session.Slash(ctx, "/pi-square-profile publish", "pi-square: profile publish")).To(Succeed())
 		publish, err := session.Bash(ctx, "!!", "if touch probe-file 2>/dev/null; then rm -f probe-file; echo writable; else echo readonly; fi")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(session.Slash(ctx, "/gh-mode toggle", "pi-square: browse")).To(Succeed())
+		Expect(session.Slash(ctx, "/pi-square-profile toggle", "pi-square: profile browse")).To(Succeed())
 		toggled, err := session.Bash(ctx, "!", "if touch probe-file 2>/dev/null; then rm -f probe-file; echo writable; else echo readonly; fi")
 		Expect(err).NotTo(HaveOccurred())
 
@@ -80,14 +80,14 @@ var _ = Describe("sandbox permissions and isolation", func() {
 		_ = os.Remove(fixture.Workdir + "/" + release)
 		opts, err := fixture.SessionOptions("browse")
 		Expect(err).NotTo(HaveOccurred())
-		session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode=browse", "--"), opts)
+		session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--profile=browse", "--"), opts)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(session.Close)
 
 		// when
 		running, err := session.StartBash(ctx, "!", "while [ ! -e "+harness.ShellJoin(release)+" ]; do sleep .05; done; if touch probe-file 2>/dev/null; then rm -f probe-file; echo writable; else echo readonly; fi")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(session.Slash(ctx, "/gh-mode local", "pi-square: local")).To(Succeed())
+		Expect(session.Slash(ctx, "/pi-square-profile local", "pi-square: profile local")).To(Succeed())
 		completedBeforeRelease := running.Completed()
 		// Host-side release is mechanics, not an action under test; pi accepts only
 		// one interactive shell command at a time. The read-only mount observes it.
@@ -99,18 +99,18 @@ var _ = Describe("sandbox permissions and isolation", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		// then
-		Expect(completedBeforeRelease).To(BeFalse(), "the mode switch must land while the browse command is running")
+		Expect(completedBeforeRelease).To(BeFalse(), "the profile switch must land while the browse command is running")
 		Expect(old.Output).To(Equal([]byte("readonly\n")))
 		Expect(newResult.Output).To(Equal([]byte("writable\n")))
 		Expect(session.Quit(ctx)).To(Succeed())
 	})
 
 	DescribeTable("exposes only the dummy credential and restricted root",
-		func(ctx SpecContext, mode string) {
+		func(ctx SpecContext, profile string) {
 			// given
-			opts, err := fixture.SessionOptions(mode)
+			opts, err := fixture.SessionOptions(profile)
 			Expect(err).NotTo(HaveOccurred())
-			session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode="+mode, "--"), opts)
+			session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--profile="+profile, "--"), opts)
 			Expect(err).NotTo(HaveOccurred())
 			DeferCleanup(session.Close)
 			probe := strings.Join([]string{
@@ -139,24 +139,24 @@ var _ = Describe("sandbox permissions and isolation", func() {
 			Expect(v["INHERITED_SOCKETS"]).To(Equal("0"))
 			Expect(v["HOST_TMP"]).To(Equal("hidden"))
 			Expect(v["WORKDIR"]).To(Equal("visible"))
-			if mode == "publish" {
+			if profile == "publish" {
 				Expect(v["HOME"]).To(Equal(fixture.HostHome))
 			} else {
 				Expect(v["HOME"]).To(MatchRegexp(`^/tmp/pi-command-home-`))
 			}
 			Expect(session.Quit(ctx)).To(Succeed())
 		},
-		Entry("in browse mode", "browse"),
-		Entry("in local mode", "local"),
-		Entry("in publish mode", "publish"),
+		Entry("in browse profile", "browse"),
+		Entry("in local profile", "local"),
+		Entry("in publish profile", "publish"),
 	)
 
 	DescribeTable("denies REST, GraphQL, and Git writes without escalation",
-		func(ctx SpecContext, mode string) {
+		func(ctx SpecContext, profile string) {
 			// given
-			opts, err := fixture.SessionOptions(mode)
+			opts, err := fixture.SessionOptions(profile)
 			Expect(err).NotTo(HaveOccurred())
-			session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode="+mode, "--"), opts)
+			session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--profile="+profile, "--"), opts)
 			Expect(err).NotTo(HaveOccurred())
 			DeferCleanup(session.Close)
 			var body struct {
@@ -191,24 +191,24 @@ var _ = Describe("sandbox permissions and isolation", func() {
 			Expect(body.Error.Code).To(Equal("write_requires_publish"))
 			Expect(body.Message).To(Equal("write_requires_publish: " + body.Error.Message))
 			Expect(mutation.Status).To(Equal(1))
-			Expect(mutation.Output).To(MatchRegexp(`gh: write_requires_publish: GraphQL mutations require publish mode \(HTTP 403\)`))
+			Expect(mutation.Output).To(MatchRegexp(`gh: write_requires_publish: GraphQL mutations require publish profile \(HTTP 403\)`))
 			Expect(post.Status).To(Equal(1))
-			Expect(post.Output).To(MatchRegexp(`gh: write_requires_publish: POST is a write and requires publish mode \(HTTP 403\)`))
+			Expect(post.Output).To(MatchRegexp(`gh: write_requires_publish: POST is a write and requires publish profile \(HTTP 403\)`))
 			Expect(push.Status).NotTo(Equal(0))
-			Expect(push.Output).To(ContainSubstring("write_requires_publish: git push requires publish mode"))
-			Expect(screen).NotTo(ContainSubstring("Switch mode to publish"))
-			Expect(session.Slash(ctx, "/gh-mode status", "pi-square: "+mode)).To(Succeed())
+			Expect(push.Output).To(ContainSubstring("write_requires_publish: git push requires publish profile"))
+			Expect(screen).NotTo(ContainSubstring("Switch profile to publish"))
+			Expect(session.Slash(ctx, "/pi-square-profile status", "pi-square: profile "+profile)).To(Succeed())
 			Expect(session.Quit(ctx)).To(Succeed())
 		},
-		Entry("in browse mode", "browse"),
-		Entry("in local mode", "local"),
+		Entry("in browse profile", "browse"),
+		Entry("in local profile", "local"),
 	)
 
 	It("blocks proxy bypass, plain HTTP, private destinations, and non-443 ports", func(ctx SpecContext) {
 		// given
 		opts, err := fixture.SessionOptions("browse")
 		Expect(err).NotTo(HaveOccurred())
-		session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--gh-mode=browse", "--"), opts)
+		session, err := harness.OpenPi(ctx, exec.Command(fixture.Binary, "--profile=browse", "--"), opts)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(session.Close)
 		probe := strings.Join([]string{`probe() { local label=$1; shift; local out; out=$("$@" 2>&1); printf '%s=exit %s: %s\n' "$label" "$?" "$out"; }`, `probe DIRECT curl -sS -m 5 --noproxy '*' https://api.github.com/`, `probe PLAIN_HTTP curl -sS -m 5 http://example.com/`, `probe PRIVATE curl -sS -m 5 https://10.0.0.1/`, `probe LOOPBACK curl -sS -m 5 https://127.0.0.1/`, `probe OTHER_PORT curl -sS -m 5 https://example.com:8443/`, `probe API_PORT curl -sS -m 5 https://api.github.com:8443/`}, "; ")
