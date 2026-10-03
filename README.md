@@ -49,14 +49,22 @@ file is an error. Configured profiles replace built-ins, without inheritance.
 {
   "defaultProfile": "offline",
   "profiles": {
-    "offline": { "workdir": "rw", "github": "ro", "net": "off", "bash": "on" },
-    "review": { "workdir": "ro", "github": "ro", "net": "on", "bash": "off" }
+    "offline": {
+      "workdir": "rw", "github": "ro", "net": "off", "bash": "on",
+      "prompt": "Work locally without network access."
+    },
+    "review": {
+      "workdir": "ro", "github": "ro", "net": "on", "bash": "off",
+      "prompt": "Review the project without making changes."
+    }
   }
 }
 ```
 
-Every profile must define `workdir` and `github` (`ro|rw`), plus `net` and `bash`
-(`on|off`). Missing resources, unknown fields (including `version` and `git`),
+Every profile must define `workdir` and `github` (`ro|rw`), `net` and `bash`
+(`on|off`), and a non-empty `prompt`. The prompt is added to the model's system
+prompt whenever that profile is active; `--mode=dev` still suppresses all profile
+prompt guidance. Missing resources, unknown fields (including `version` and `git`),
 invalid values, empty profiles, and unknown defaults fail startup. Names contain
 letters, digits, hyphens or underscores, starting with a letter or digit;
 `status`, `toggle`, and `t` are reserved.

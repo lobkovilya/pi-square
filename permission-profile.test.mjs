@@ -11,9 +11,9 @@ const source = stripTypeScriptTypes(fs.readFileSync(new URL("./permission-profil
 	.replace("export default function permissionProfileExtension", "function permissionProfileExtension");
 
 const builtins = { defaultProfile: "browse", profiles: {
- browse: { workdir: "ro", github: "ro", net: "on", bash: "off" },
- local: { workdir: "rw", github: "ro", net: "on", bash: "on" },
- publish: { workdir: "rw", github: "rw", net: "on", bash: "on" },
+ browse: { workdir: "ro", github: "ro", net: "on", bash: "off", prompt: "Browse guidance." },
+ local: { workdir: "rw", github: "ro", net: "on", bash: "on", prompt: "Local guidance." },
+ publish: { workdir: "rw", github: "rw", net: "on", bash: "on", prompt: "Publish guidance." },
 }};
 function setup(initialProfile, entries = [], config = builtins, accept = true) {
 	const handlers = {};
@@ -70,6 +70,7 @@ test("profile transitions synchronize bash availability, status, prompt and guar
 		assert.deepEqual(Array.from(app.active()).filter((name) => name !== "bash"), ["read", "edit", "write", "custom"]);
 		assert.match(app.status(), new RegExp(` ${enabled ? "on" : "off"}`));
 		const prompt = await app.emit("before_agent_start", { systemPrompt: "base" });
+		assert.ok(prompt.systemPrompt.includes(builtins.profiles[profile].prompt));
 		assert.match(prompt.systemPrompt, enabled ? /bash tool is available/ : /bash tool is unavailable/);
 		const event = { toolName: "bash", input: { command: "ls" } };
 		const result = await app.emit("tool_call", event);
@@ -107,8 +108,8 @@ test("the namespaced command writes namespaced profile state", async () => {
 
 test("custom profiles control independent resources and switch immediately", async () => {
  const config = { defaultProfile: "offline", profiles: {
-  offline: { workdir: "rw", github: "ro", net: "off", bash: "on" },
-  review: { workdir: "ro", github: "ro", net: "on", bash: "off" },
+  offline: { workdir: "rw", github: "ro", net: "off", bash: "on", prompt: "Work without network access." },
+  review: { workdir: "ro", github: "ro", net: "on", bash: "off", prompt: "Review without making changes." },
  }};
  const app = setup(undefined, [], config, false);
  await app.emit("session_start");
@@ -120,11 +121,12 @@ test("custom profiles control independent resources and switch immediately", asy
  assert.equal(result.block, true);
  assert.equal(event.input.command, "echo ok");
  const prompt = await app.emit("before_agent_start", { systemPrompt: "base" });
+ assert.match(prompt.systemPrompt, /Review without making changes\./);
  assert.match(prompt.systemPrompt, /mandatory proxy/);
 });
 
 test("read-only custom profiles block writes without confirmation", async () => {
- const config = { defaultProfile: "review", profiles: { review: { workdir: "ro", github: "rw", net: "off", bash: "on" } } };
+ const config = { defaultProfile: "review", profiles: { review: { workdir: "ro", github: "rw", net: "off", bash: "on", prompt: "Review locally." } } };
  const app = setup(undefined, [], config, false);
  await app.emit("session_start");
  const result = await app.emit("tool_call", { toolName: "write", input: { path: "new-directory/new-file" } });

@@ -25,15 +25,18 @@ var _ = Describe("permission configuration", func() {
 	},
 		Entry("no profiles", `{}`, "profiles"),
 		Entry("version", `{"version":1}`, "unknown field"),
-		Entry("missing net", `{"defaultProfile":"x","profiles":{"x":{"workdir":"rw","github":"ro","bash":"on"}}}`, `profile "x": net`),
-		Entry("invalid github", `{"defaultProfile":"x","profiles":{"x":{"workdir":"rw","github":"off","net":"on","bash":"on"}}}`, "github"),
+		Entry("missing net", `{"defaultProfile":"x","profiles":{"x":{"workdir":"rw","github":"ro","bash":"on","prompt":"Custom guidance."}}}`, `profile "x": net`),
+		Entry("invalid github", `{"defaultProfile":"x","profiles":{"x":{"workdir":"rw","github":"off","net":"on","bash":"on","prompt":"Custom guidance."}}}`, "github"),
+		Entry("missing prompt", `{"defaultProfile":"x","profiles":{"x":{"workdir":"rw","github":"ro","net":"on","bash":"on"}}}`, "prompt"),
+		Entry("blank prompt", `{"defaultProfile":"x","profiles":{"x":{"workdir":"rw","github":"ro","net":"on","bash":"on","prompt":"  "}}}`, "prompt"),
 		Entry("git resource", `{"profiles":{"x":{"git":"ro"}}}`, "unknown field"),
-		Entry("unknown default", `{"defaultProfile":"missing","profiles":{"x":{"workdir":"rw","github":"ro","net":"off","bash":"on"}}}`, "defaultProfile"),
+		Entry("unknown default", `{"defaultProfile":"missing","profiles":{"x":{"workdir":"rw","github":"ro","net":"off","bash":"on","prompt":"Custom guidance."}}}`, "defaultProfile"),
 		Entry("trailing object", `{} {}`, "single JSON"),
 	)
+
 	It("replaces builtins with complete profiles", func() {
 		// given
-		input := []byte(`{"defaultProfile":"offline","profiles":{"offline":{"workdir":"ro","github":"rw","net":"off","bash":"on"}}}`)
+		input := []byte(`{"defaultProfile":"offline","profiles":{"offline":{"workdir":"ro","github":"rw","net":"off","bash":"on","prompt":"Stay offline."}}}`)
 
 		// when
 		c, err := parseConfiguration(input)
@@ -42,9 +45,11 @@ var _ = Describe("permission configuration", func() {
 		// then
 		Expect(err).NotTo(HaveOccurred())
 		Expect(c.Profiles).To(HaveLen(1))
+		Expect(c.Profiles["offline"].Prompt).To(Equal("Stay offline."))
 		Expect(class).To(Equal(classOffline))
 		Expect(ro).To(BeTrue())
 	})
+
 	It("loads the XDG file once and errors for missing explicit files", func() {
 		// given
 		dir := GinkgoT().TempDir()

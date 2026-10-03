@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 )
 
 type profile struct {
@@ -17,7 +18,9 @@ type profile struct {
 	GitHub  string `json:"github"`
 	Net     string `json:"net"`
 	Bash    string `json:"bash"`
+	Prompt  string `json:"prompt"`
 }
+
 type configuration struct {
 	DefaultProfile string             `json:"defaultProfile"`
 	Profiles       map[string]profile `json:"profiles"`
@@ -25,9 +28,18 @@ type configuration struct {
 
 func builtinConfiguration() configuration {
 	return configuration{"browse", map[string]profile{
-		"browse":  {"ro", "ro", "on", "off"},
-		"local":   {"rw", "ro", "on", "on"},
-		"publish": {"rw", "rw", "on", "on"},
+		"browse": {
+			Workdir: "ro", GitHub: "ro", Net: "on", Bash: "off",
+			Prompt: "The user intends analytical work only: investigation, research, planning, or review. Do not begin implementation or publish results. A review request means report findings in this conversation, not post comments or submit a review.",
+		},
+		"local": {
+			Workdir: "rw", GitHub: "ro", Net: "on", Bash: "on",
+			Prompt: "The user intends local implementation. You may edit, test, and commit locally, but keep your work on this host. Do not push, publish, or upload code, patches, findings, or other work products, even through otherwise available network access or credentials.",
+		},
+		"publish": {
+			Workdir: "rw", GitHub: "rw", Net: "on", Bash: "on",
+			Prompt: "The user permits publishing work as part of the requested task, including pushes, pull requests, issues, comments, and submitted reviews. Publication is allowed, not required.",
+		},
 	}}
 }
 
@@ -54,6 +66,10 @@ func parseConfiguration(data []byte) (configuration, error) {
 			if field.value != field.a && field.value != field.b {
 				return c, fmt.Errorf("profile %q: %s is missing or invalid (%q); expected %s or %s", name, field.name, field.value, field.a, field.b)
 			}
+		}
+
+		if strings.TrimSpace(p.Prompt) == "" {
+			return c, fmt.Errorf("profile %q: prompt must not be empty", name)
 		}
 	}
 	if _, ok := c.Profiles[c.DefaultProfile]; !ok {
